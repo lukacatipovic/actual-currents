@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>🌊 Tidal Currents Visualizer</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="/static/leaflet-velocity.css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --dark-bg: #343333;
+            --dark-card: #2a2a2a;
+            --dark-border: #000000;
+            --primary: #4b4b4b;
+            --primary-hover: #000000;
+            --text: #f1f5f9;
+            --text-muted: #94a3b8;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --sidebar-width: 320px;
+            --sidebar-collapsed: 60px;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            height: 100%;
+            width: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--dark-bg);
+            color: var(--text);
+            overflow: hidden;
+        }
+        
+        #map {
+            height: 100%;
+            width: 100%;
+            z-index: 1;
+        }
+        
+        /* Loading Overlay */
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(15, 23, 42, 0.9);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            backdrop-filter: blur(4px);
+        }
+        
+        .loading-spinner {
+            text-align: center;
+            color: var(--text);
+        }
+        
+        .spinner {
+            border: 4px solid rgba(59, 130, 246, 0.3);
+            border-radius: 50%;
+            border-top: 4px solid var(--primary);
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        /* Title Bar */
+        #titleBar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: var(--dark-card);
+            padding: 15px 20px;
+            border-radius: 12px;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--dark-border);
+            max-width: 300px;
+        }
+        
+        #titleBar h2 {
+            color: var(--text);
+            font-size: 1.4rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 0;
+        }
+        
+        #titleBar h2 i {
+            color: var(--primary);
+        }
+        
+        /* Status Indicator */
+        #statusIndicator {
+            position: absolute;
+            bottom: 20px;
+            left: 20px;
+            background: var(--dark-card);
+            padding: 15px;
+            border-radius: 12px;
+            z-index: 1000;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--dark-border);
+            width: 300px;
+            max-width: 90vw;
+        }
+        
+        #status {
+            font-size: 0.95rem;
+            line-height: 1.5;
+            margin-bottom: 8px;
+        }
+        
+        .status-success { color: var(--success); }
+        .status-loading { color: var(--primary); }
+        .status-error { color: var(--error); }
+        .status-ready { color: var(--text-muted); }
+        
+        #timeLabel {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        /* Sidebar - Right Side */
+        #sidebar {
+            position: absolute;
+            top: 20px;
+            right: 0;
+            height: calc(100% - 40px);
+            background: var(--dark-card);
+            border-radius: 12px 0 0 12px;
+            box-shadow: -8px 0 32px rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--dark-border);
+            border-right: none;
+            z-index: 1000;
+            transition: transform 0.3s ease;
+            display: flex;
+            overflow: hidden;
+        }
+        
+        #sidebar.collapsed {
+            transform: translateX(calc(100% - 50px));
+        }
+        
+        .sidebar-toggle {
+            width: 50px;
+            background: var(--dark-bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-right: 1px solid var(--dark-border);
+        }
+        
+        .sidebar-toggle i {
+            font-size: 1.2rem;
+            color: var(--text-muted);
+            transition: transform 0.3s;
+        }
+        
+        .sidebar-content {
+            width: var(--sidebar-width);
+            padding: 20px;
+            overflow-y: auto;
+        }
+        
+        #sidebar.collapsed .sidebar-content {
+            opacity: 0;
+            pointer-events: none;
+        }
+        
+        .sidebar-section {
+            margin-bottom: 25px;
+        }
+        
+        .sidebar-section h3 {
+            margin-bottom: 15px;
+            color: var(--text);
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .sidebar-section h3 i {
+            color: var(--primary);
+        }
+        
+        /* Date/Time Input in Sidebar */
+        .time-input-group {
+            margin-bottom: 15px;
+        }
+        
+        .time-input-group label {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        #timeInput {
+            width: 100%;
+            padding: 10px 14px;
+            background: var(--dark-bg);
+            border: 1px solid var(--dark-border);
+            border-radius: 8px;
+            color: var(--text);
+            font-size: 1rem;
+            transition: border-color 0.2s;
+        }
+        
+        #timeInput:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+        
+        .btn-primary {
+            width: 100%;
+            padding: 12px;
+            background: var(--primary);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        
+        .btn-primary:hover {
+            background: var(--primary-hover);
+        }
+        
+        .btn-primary:active {
+            transform: translateY(1px);
+        }
+        
+        /* Basemap Controls */
+        .basemap-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+        
+        .basemap-option {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--dark-bg);
+            border: 1px solid var(--dark-border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .basemap-option:hover {
+            background: rgba(59, 130, 246, 0.1);
+            border-color: var(--primary);
+        }
+        
+        .basemap-option.active {
+            background: rgba(59, 130, 246, 0.2);
+            border-color: var(--primary);
+        }
+        
+        .basemap-preview {
+            width: 60px;
+            height: 40px;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--dark-border);
+        }
+        
+        .basemap-info {
+            flex: 1;
+        }
+        
+        .basemap-name {
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+        }
+        
+        .basemap-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+        }
+        
+        /* Layer Controls */
+        .layer-controls {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        
+        .layer-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .layer-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .layer-icon {
+            width: 24px;
+            height: 24px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--primary);
+            color: white;
+        }
+        
+        /* Toggle Switch */
+        .toggle-switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+        
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+        
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--dark-border);
+            transition: .4s;
+            border-radius: 34px;
+        }
+        
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 4px;
+            bottom: 4px;
+            background-color: white;
+            transition: .4s;
+            border-radius: 50%;
+        }
+        
+        input:checked + .toggle-slider {
+            background-color: var(--primary);
+        }
+        
+        input:checked + .toggle-slider:before {
+            transform: translateX(24px);
+        }
+        
+        /* Legend */
+        .legend {
+            background: var(--dark-bg);
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid var(--dark-border);
+        }
+        
+        .legend-title {
+            font-weight: 600;
+            margin-bottom: 10px;
+            color: var(--text);
+        }
+        
+        .legend-scale {
+            height: 12px;
+            background: linear-gradient(to right, 
+                rgb(36,104,180),
+                rgb(60,157,194),
+                rgb(128,205,193),
+                rgb(175,240,91),
+                rgb(254,217,42),
+                rgb(255,170,0),
+                rgb(255,69,0)
+            );
+            border-radius: 6px;
+            margin-bottom: 8px;
+        }
+        
+        .legend-labels {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8rem;
+            color: var(--text-muted);
+        }
+        
+        /* View Info */
+        .view-info-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .view-info-item {
+            background: var(--dark-bg);
+            border: 1px solid var(--dark-border);
+            border-radius: 8px;
+            padding: 12px;
+            text-align: center;
+        }
+        
+        .view-info-value {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--primary);
+            margin-top: 5px;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            #titleBar {
+                width: calc(100% - 40px);
+                max-width: none;
+            }
+            
+            #statusIndicator {
+                width: calc(100% - 40px);
+                max-width: none;
+            }
+            
+            #sidebar {
+                width: 100%;
+                height: 300px;
+                top: auto;
+                bottom: 0;
+                border-radius: 12px 12px 0 0;
+                transform: translateY(calc(100% - 50px));
+            }
+            
+            #sidebar.collapsed {
+                transform: translateY(calc(100% - 50px));
+            }
+            
+            .sidebar-toggle {
+                width: 100%;
+                height: 50px;
+                border-right: none;
+                border-bottom: 1px solid var(--dark-border);
+            }
+            
+            .sidebar-toggle i {
+                transform: rotate(-90deg);
+            }
+            
+            #sidebar.collapsed .sidebar-toggle i {
+                transform: rotate(90deg);
+            }
+            
+            .sidebar-content {
+                width: 100%;
+                height: calc(100% - 50px);
+            }
+        }
+        
+        /* Basemap Controls */
+        .basemap-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 10px;
+        }
+
+        .basemap-option {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--dark-bg);
+            border: 1px solid var(--dark-border);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .basemap-option:hover {
+            background: rgba(107, 114, 128, 0.1);
+            border-color: var(--primary);
+        }
+
+        .basemap-option.active {
+            background: rgba(107, 114, 128, 0.2);
+            border-color: var(--primary);
+        }
+
+        .basemap-preview {
+            width: 60px;
+            height: 40px;
+            border-radius: 6px;
+            overflow: hidden;
+            background: var(--dark-border);
+            position: relative;
+            flex-shrink: 0; /* Prevent shrinking */
+        }
+
+        .basemap-thumbnail {
+            width: 100%;
+            height: 100%;
+            object-fit: cover; /* This ensures the image covers the area */
+        }
+
+        .basemap-info {
+            flex: 1;
+            min-width: 0; /* Prevent text overflow issues */
+        }
+
+        .basemap-name {
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .basemap-desc {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+
+        /* Custom leaflet controls */
+        .leaflet-control-container .leaflet-control {
+            background: var(--dark-card);
+            border: 1px solid var(--dark-border);
+            color: var(--text);
+        }
+        
+        .leaflet-control-container .leaflet-control-attribution {
+            background: rgba(30, 41, 59, 0.8);
+            color: var(--text-muted);
+        }
+        
+        .leaflet-control-container .leaflet-control-attribution a {
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <div>Loading tidal data...</div>
+        </div>
+    </div>
+    
+    <!-- Main Map -->
+    <div id="map"></div>
+    
+
+    
+    <!-- Status Indicator -->
+    <div id="statusIndicator">
+        <div id="status">Ready to load tidal currents</div>
+        <div id="timeLabel">
+            <i class="far fa-calendar"></i>
+            <span id="timeDisplay">No data loaded</span>
+        </div>
+    </div>
+    
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <div class="sidebar-toggle" onclick="toggleSidebar()">
+            <i class="fas fa-chevron-left"></i>
+        </div>
+        
+        <div class="sidebar-content">
+            <!-- Date/Time Selection Section -->
+            <div class="sidebar-section">
+                <h3><i class="far fa-clock"></i> Date & Time</h3>
+                <div class="time-input-group">
+                    <label for="timeInput">Select Date & Time (24 hr)</label>
+                    <input type="text" id="timeInput" value="2024-01-15 14:30">
+                </div>
+                <button class="btn-primary" onclick="loadCurrentData()">
+                    <i class="fas fa-sync-alt"></i> Load Currents
+                </button>
+            </div>
+            
+            <!-- Basemap Section -->
+            <div class="sidebar-section">
+                <h3><i class="fas fa-layer-group"></i> Basemap</h3>
+                <div class="basemap-grid" id="basemapControls">
+                    <!-- Basemap options will be populated by JavaScript -->
+                </div>
+            </div>
+            
+            
+            
+            <!-- Legend -->
+            <div class="sidebar-section">
+                <h3><i class="fas fa-chart-bar"></i> Current Speed</h3>
+                <div class="legend">
+                    <div class="legend-title">m/s</div>
+                    <div class="legend-scale"></div>
+                    <div class="legend-labels">
+                        <span>0</span>
+                        <span>0.5</span>
+                        <span>1.0</span>
+                        <span>1.5</span>
+                        <span>2.0+</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- View Info -->
+            <div class="sidebar-section">
+                <h3><i class="fas fa-info-circle"></i> View Info</h3>
+                <div class="view-info-grid">
+                    <div class="view-info-item">
+                        <div><i class="fas fa-search"></i> Zoom</div>
+                        <div class="view-info-value" id="zoomLevel">15</div>
+                    </div>
+                    <div class="view-info-item">
+                        <div><i class="fas fa-expand-alt"></i> Cells</div>
+                        <div class="view-info-value" id="gridCells">-</div>
+                    </div>
+                </div>
+                <div style="margin-top: 10px; font-size: 0.85rem; color: var(--text-muted);">
+                    <i class="fas fa-arrows-alt"></i> Viewport: <span id="viewportSize">Calculating...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Leaflet MUST come before velocity -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- Velocity depends on Leaflet, so it must come after -->
+    <script src="/static/leaflet-velocity.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
