@@ -56,3 +56,6 @@ htmlcov/
 
 # Keep data directory structure but ignore large files
 !data/.gitkeep
+
+# MVP reference code (local only)
+old/
