@@ -1524,297 +1524,285 @@ Woods Hole query (2217 nodes):
 
 ## 17. CURRENT STATUS & NEXT STEPS
 
-### ✅ What's Complete (as of 2026-02-06 Evening)
+### ✅ What's Complete (as of 2026-02-06)
 
 **Phase 1: Tidal Prediction API** - ✅ COMPLETE
-- Harmonic synthesis algorithm with ttide nodal corrections
-- Real-time velocity predictions working
-- Optimized element filtering (vectorized numpy)
-- API returns accurate tidal currents
+- Harmonic synthesis with ttide nodal corrections (`backend/app/core/tidal_calc.py`)
+- Vectorized element filtering (3000x speedup)
+- API returns accurate tidal currents in <0.02s (after first request)
 
 **Phase 2: Map Visualization** - ✅ COMPLETE
-- Velocity-colored node display (blue→green→yellow→red)
+- Velocity-colored nodes (blue→green→yellow→red)
 - Time controls (+1h/-1h, datetime picker, "Jump to Now")
-- Interactive popups (speed, direction, depth)
-- Statistics display (avg/max velocity)
-- Velocity legend
+- Interactive popups (speed, direction, depth on click)
+- Statistics display, velocity legend
 
 **Data Optimization** - ✅ COMPLETE
-- Hilbert space-filling curve ordering (order-16)
-- 10,000-node chunks for fast loading
-- Direct numpy indexing (20x speedup)
-- Query time: 0.32s (was 6.66s)
-- S3 bucket updated with optimized data
+- Hilbert curve ordering, 10k-node chunks, direct numpy indexing
+- Query time: 0.32s on first request (was 6.66s)
 
-### 🎯 Next Phase: WebGL Particle Animation
+**Auto-Load on Pan/Zoom** - ✅ COMPLETE
+- Nodes load automatically as user pans/zooms (no button click needed)
+- Debounced 100ms, AbortController cancels stale requests
+- Minimum zoom 8 threshold, graceful error handling
+- `source.setData()` pattern prevents event handler stacking
 
-**Status:** Ready to begin - Foundation is solid
+**API Performance Optimization** - ✅ COMPLETE (2026-02-06 Session 4)
+- GZip compression middleware (87% smaller responses)
+- Pre-load ALL static arrays into RAM at startup (eliminates per-request Zarr I/O)
+- Optional `include_elements` and `include_depth` query params to skip unneeded data
+- Faster element index remapping (array lookup instead of `np.vectorize(dict.get)`)
+- Optimized frontend GeoJSON loop (pre-destructured arrays, direction computed on-demand)
+- Debounce reduced from 300ms to 100ms
 
-**Why This Is Next:**
-- Current visualization shows static colored dots
-- Particle animation will show actual flow patterns
-- Essential for visual QC of tidal predictions
-- More intuitive and engaging user experience
+**Performance After Optimization:**
 
-### 📋 Phase 3: Detailed Implementation Plan
+| Metric | Before (Session 3) | After (Session 4) |
+|---|---|---|
+| First request (cold) | 0.32s | 0.34s (one-time RAM load) |
+| Subsequent requests | 0.32s | **0.017s** (19x faster) |
+| Response size (raw) | ~112 KB | ~36 KB |
+| Response size (gzip) | N/A | **14 KB** (87% reduction) |
+| Without elements/depth (gzip) | N/A | **10 KB** |
+| Debounce delay | 300ms | 100ms |
 
-**Goal:** Animate 5,000-10,000 particles flowing with tidal currents at 60 FPS
+**Key architectural change:** `MeshData` class in `currents.py` pre-loads all numpy arrays
+(lat, lon, depth, elements, u_amp, v_amp, u_phase, v_phase, tidefreqs) into RAM on first
+request. Subsequent requests do pure numpy slicing with zero Zarr I/O.
 
-#### Step 1: Triangle Spatial Index (~1-2 hours)
+---
 
-**Purpose:** Fast lookup of which triangle contains a given particle position
+### 🎯 IMMEDIATE NEXT: Particle Flow Animation
 
-**Implementation:**
+**Status:** Plan approved, `frontend/js/` directory created, implementation NOT started yet.
+
+**Goal:** Create `frontend/js/particles.js` with two classes, wire into `frontend/index.html`.
+
+---
+
+### 📋 EXACT IMPLEMENTATION PLAN (Ready to Execute)
+
+#### File 1: `frontend/js/particles.js` (NEW - create this file)
+
+**Class 1: `TriangleSpatialIndex`**
+Grid-based spatial index for fast "which triangle contains point?" lookup.
+
 ```javascript
-// In frontend/index.html (or separate particle-engine.js)
-
 class TriangleSpatialIndex {
-    constructor(nodes, elements, gridSize = 100) {
-        // Create grid overlay for viewport
-        this.gridSize = gridSize;
-        this.grid = new Map(); // key: "x,y" → array of triangle indices
+    // Constructor: takes lats[], lons[], triangles[][], gridSize (default 50)
+    // Computes bounding box, builds 50x50 grid
+    // Each grid cell stores array of triangle indices that overlap it
 
-        // For each triangle, compute bounding box
-        // Map triangle to all grid cells it intersects
-        this.buildIndex(nodes, elements);
-    }
+    _buildIndex()     // For each triangle: compute bbox, find overlapping grid cells, store
+    findTriangle(lat, lon)  // Grid lookup → candidate triangles → point-in-triangle test → return index or -1
+    getBarycentricCoords(lat, lon, triIdx)  // Returns [w0, w1, w2] weights for the 3 vertices
 
-    buildIndex(nodes, elements) {
-        // For each triangle:
-        //   1. Get vertices (lat, lon)
-        //   2. Compute bounding box
-        //   3. Find grid cells that overlap bbox
-        //   4. Add triangle index to those cells
-    }
-
-    findTriangle(lat, lon) {
-        // 1. Get grid cell for point
-        // 2. Get candidate triangles in that cell
-        // 3. Test point-in-triangle for each candidate
-        // 4. Return triangle index or null
-    }
+    // Point-in-triangle uses barycentric/cross-product method:
+    // v0 = C-A, v1 = B-A, v2 = P-A
+    // dot products → u, v → point inside if u>=0, v>=0, u+v<=1
 }
 ```
 
-**Key Algorithms:**
-- **Point-in-triangle test:** Cross product method (Google "barycentric coordinates")
-- **Grid cell mapping:** `cellX = Math.floor((lon - minLon) / cellWidth * gridSize)`
+**Class 2: `ParticleSystem`**
+Canvas2D overlay with trail-effect rendering.
 
-#### Step 2: Barycentric Interpolation (~1 hour)
-
-**Purpose:** Interpolate velocity at any point within a triangle
-
-**Implementation:**
-```javascript
-function barycentricInterpolation(point, triangle, velocities) {
-    // Given:
-    // - point: {lat, lon}
-    // - triangle: {v0: {lat, lon}, v1: {lat, lon}, v2: {lat, lon}}
-    // - velocities: {u0, v0, u1, v1, u2, v2}
-
-    // 1. Calculate barycentric coordinates (w0, w1, w2)
-    //    where w0 + w1 + w2 = 1
-    const [w0, w1, w2] = calculateBarycentricWeights(point, triangle);
-
-    // 2. Interpolate velocity
-    const u = w0 * velocities.u0 + w1 * velocities.u1 + w2 * velocities.u2;
-    const v = w0 * velocities.v0 + w1 * velocities.v1 + w2 * velocities.v2;
-
-    return {u, v};
-}
-```
-
-**Reference:** See `old/` directory for MVP implementation if available
-
-#### Step 3: Particle System (~2-3 hours)
-
-**Simple Canvas2D Approach (Recommended for MVP):**
 ```javascript
 class ParticleSystem {
-    constructor(map, meshData, numParticles = 5000) {
-        this.map = map;
-        this.particles = this.initParticles(numParticles);
-        this.spatialIndex = new TriangleSpatialIndex(
-            meshData.nodes,
-            meshData.elements
-        );
-        this.meshData = meshData;
+    // Constructor: takes map, meshData, options={numParticles:5000, speedScale:3000, maxAge:100, trailFade:0.96, lineWidth:1.2}
+    // Builds TriangleSpatialIndex from meshData
+    // Creates canvas overlay via map.getCanvasContainer()
+    // Spawns particles randomly in viewport
+    // Tracks map movement state (_isMoving flag)
 
-        // Create canvas overlay
-        this.canvas = document.createElement('canvas');
-        this.canvas.style.position = 'absolute';
-        this.canvas.style.pointerEvents = 'none';
-        map.getContainer().appendChild(this.canvas);
+    // Public API:
+    start()    // Begin animation loop
+    stop()     // Stop animation, clear canvas
+    toggle()   // Toggle on/off, returns boolean
+    destroy()  // Remove canvas, clean up event listeners
+    updateMeshData(meshData)  // Rebuild spatial index (called when user pans to new area)
 
-        this.animate();
+    // Animation loop (_animate → _update → _render → requestAnimationFrame):
+
+    _update() {
+        // For each particle:
+        //   1. Age++, respawn if too old (maxAge frames)
+        //   2. spatialIndex.findTriangle(lat, lon) → triIdx
+        //   3. If triIdx < 0: respawn (outside mesh)
+        //   4. getBarycentricCoords → [w0, w1, w2]
+        //   5. Interpolate: u = w0*u[v0] + w1*u[v1] + w2*u[v2] (same for v)
+        //   6. Save prevLat/prevLon
+        //   7. Update: lat += v * dt * speedScale / 111000
+        //             lon += u * dt * speedScale / (111000 * cos(lat))
     }
 
-    initParticles(num) {
-        const bounds = this.map.getBounds();
-        return Array.from({length: num}, () => ({
-            lat: bounds.getSouth() + Math.random() * (bounds.getNorth() - bounds.getSouth()),
-            lon: bounds.getWest() + Math.random() * (bounds.getEast() - bounds.getWest()),
-            age: Math.random() * 100, // For fading
-            opacity: 1
-        }));
+    _render() {
+        // If map is moving: ctx.clearRect (no trails during pan)
+        // If stationary: fade via globalCompositeOperation='destination-in' + semi-transparent fill
+        //   This creates trail effect where old particle positions gradually fade
+        // Batch all line segments into single ctx.beginPath()/stroke() call:
+        //   For each particle with valid prevLat:
+        //     prev = map.project([prevLon, prevLat])
+        //     curr = map.project([lon, lat])
+        //     ctx.moveTo(prev.x, prev.y) → ctx.lineTo(curr.x, curr.y)
+        //   Single ctx.stroke() — performant for 5000 particles
     }
 
-    animate() {
-        const dt = 1/60; // 60 FPS
+    // Canvas setup:
+    //   position: absolute, top:0, left:0, pointer-events:none
+    //   HiDPI: canvas.width = clientWidth * devicePixelRatio, ctx.setTransform(dpr,0,0,dpr,0,0)
+    //   Resize handler syncs canvas size
 
-        this.particles.forEach(particle => {
-            // 1. Find triangle containing particle
-            const triangleIdx = this.spatialIndex.findTriangle(
-                particle.lat,
-                particle.lon
-            );
-
-            if (triangleIdx !== null) {
-                // 2. Get triangle vertices and velocities
-                const triangle = this.getTriangle(triangleIdx);
-                const velocities = this.getTriangleVelocities(triangleIdx);
-
-                // 3. Interpolate velocity at particle position
-                const {u, v} = barycentricInterpolation(
-                    particle,
-                    triangle,
-                    velocities
-                );
-
-                // 4. Update particle position
-                // Convert m/s to degrees (approximate)
-                const metersPerDegree = 111000;
-                particle.lat += v * dt / metersPerDegree;
-                particle.lon += u * dt / (metersPerDegree * Math.cos(particle.lat * Math.PI/180));
-
-                // 5. Age particle (fade over time)
-                particle.age++;
-                particle.opacity = Math.max(0, 1 - particle.age / 100);
-            } else {
-                // Particle outside mesh - respawn
-                this.respawnParticle(particle);
-            }
-        });
-
-        // Render particles
-        this.render();
-
-        requestAnimationFrame(() => this.animate());
-    }
-
-    render() {
-        const ctx = this.canvas.getContext('2d');
-        ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
-
-        this.particles.forEach(particle => {
-            // Convert lat/lon to screen coordinates
-            const point = this.map.project([particle.lon, particle.lat]);
-
-            // Draw particle
-            ctx.fillStyle = `rgba(255, 255, 255, ${particle.opacity})`;
-            ctx.fillRect(point.x - 1, point.y - 1, 2, 2);
-        });
-    }
+    // Event listeners:
+    //   window 'resize' + map 'resize' → _syncCanvasSize
+    //   map 'move' → _isMoving = true
+    //   map 'moveend' → _isMoving = false
 }
 ```
 
-**Alternative: WebGL for Better Performance:**
-- Use `regl` library for cleaner WebGL code
-- Render particles as instanced points
-- Compute particle updates in vertex shader
-- Much faster for 10k+ particles
+**Performance budget (estimated):**
+- `_update`: ~0.6ms (5000 spatial index lookups + interpolation)
+- `_render` projection: ~0.1ms (10,000 map.project() calls)
+- `_render` drawing: ~0.5ms (single batched stroke)
+- Total: ~1.3ms/frame (well within 16ms for 60fps)
 
-#### Step 4: Integration (~1 hour)
+#### File 2: `frontend/index.html` (MODIFY)
 
-**Add to frontend/index.html:**
+**Changes needed:**
+
+1. Add script tag before main `<script>`:
+```html
+<script src="js/particles.js"></script>
+```
+
+2. Update `startAnimation()` function (currently a placeholder at ~line 387):
 ```javascript
-let particleSystem = null;
+function startAnimation() {
+    if (!meshData) return;
 
-function onLoadDataClick() {
-    // ... existing code to load mesh data ...
-
-    // After data loaded:
-    if (particleSystem) {
-        particleSystem.destroy();
+    if (!particleSystem) {
+        particleSystem = new ParticleSystem(map, meshData, {
+            numParticles: 5000,
+            speedScale: 3000,
+            maxAge: 100,
+            trailFade: 0.96,
+            lineWidth: 1.2
+        });
+        particleSystem.start();
+        document.getElementById('animateBtn').textContent = 'Stop Animation';
+    } else {
+        const running = particleSystem.toggle();
+        document.getElementById('animateBtn').textContent = running ? 'Stop Animation' : 'Start Animation';
     }
-    particleSystem = new ParticleSystem(map, meshData, 5000);
 }
-
-// Add UI controls
-document.getElementById('toggleParticles').addEventListener('click', () => {
-    if (particleSystem) {
-        particleSystem.toggle();
-    }
-});
 ```
 
-#### Step 5: Visual QC & Tuning (~1 hour)
+3. In `visualizeMesh()` (after statistics update, ~line 383), add:
+```javascript
+if (particleSystem) {
+    particleSystem.updateMeshData(meshData);
+}
+```
 
-**Checklist:**
-- [ ] Particles flow smoothly (no jumps)
-- [ ] Strong currents in channels/inlets (Woods Hole passage)
-- [ ] Weaker currents in open water
-- [ ] Flow direction changes over 6-hour tidal cycle
-- [ ] 60 FPS performance maintained
-- [ ] Particles fade naturally at boundaries
+4. In `clearMesh()`, add particle system cleanup:
+```javascript
+if (particleSystem) {
+    particleSystem.stop();
+}
+```
 
-**Tuning Parameters:**
-- Number of particles (5k-10k)
-- Particle lifetime (50-200 frames)
-- Opacity curve
-- Particle size
-- Color (white, or velocity-based)
+---
 
-### 🚀 How to Resume Next Session
+### 🚀 HOW TO RESUME IN NEXT SESSION
 
-**1. Verify Current State:**
+**Step 1: Verify current state**
 ```bash
 cd /Users/lukacatipovic/actual-currents
-./run_dev.sh
-open http://localhost:8000
-# Click "Load Current Data" - should be fast (~0.3s)
+cd backend && source tides/bin/activate && uvicorn app.main:app --reload --port 8000
+# In browser: open http://localhost:8000
+# Zoom to Woods Hole area (zoom 9+) - nodes should auto-load
+# Verify colored dots appear and time controls work
 ```
 
-**2. Begin Particle Implementation:**
-- Create `frontend/js/particle-system.js` (or add to index.html)
-- Start with Step 1: Triangle Spatial Index
-- Test with small number of particles first (100)
-- Scale up once working
+**Step 2: Create `frontend/js/particles.js`**
+- Implement `TriangleSpatialIndex` and `ParticleSystem` classes per plan above
+- The `frontend/js/` directory already exists (empty)
 
-**3. Key Files to Modify:**
-- `frontend/index.html` - Main visualization page
-- Add particle system code (inline or separate .js file)
-- Integrate with existing Mapbox map
+**Step 3: Wire into `frontend/index.html`**
+- Add `<script src="js/particles.js"></script>` tag
+- Update `startAnimation()`, `visualizeMesh()`, `clearMesh()` per plan above
 
-**4. Testing Locations:**
-- **Woods Hole, MA** (lat: 41.52, lon: -70.72) - Strong tidal passage
-- **NYC Harbor** (lat: 40.7, lon: -74.0) - Complex flow patterns
-- **Miami/Florida Keys** (lat: 25.2, lon: -80.5) - Coastal currents
+**Step 4: Test**
+- Zoom to Woods Hole, MA (lat: 41.52, lon: -70.72)
+- Wait for nodes to auto-load, click "Start Animation"
+- Verify particles flow with tidal currents
+- Test panning (particles should reset), time changes (flow should reverse)
 
-**5. Expected Outcome:**
-- 5,000-10,000 particles flowing at 60 FPS
-- Visually confirms tidal predictions are realistic
-- Engaging, intuitive current visualization
-- Ready for user testing and feedback
+**Key tuning parameters if particles look wrong:**
+- `speedScale`: increase if particles barely move, decrease if they fly off screen
+- `numParticles`: 5000 default, try 2000 for low-end or 10000 for dense
+- `maxAge`: 100 frames (~1.7s), increase for longer trails
+- `trailFade`: 0.96 (trails persist ~25 frames), lower = shorter trails
 
-### 📊 Success Metrics
+### Current File Structure
+```
+frontend/
+  index.html              - 436 lines, auto-load + velocity visualization ✅
+  js/                     - Directory created, empty ⏳
+    particles.js          - TO CREATE: spatial index + particle system
 
-**Performance:**
-- [ ] 60 FPS with 5k+ particles
-- [ ] <0.5s query time for viewport data
-- [ ] Smooth animation (no stuttering)
+backend/
+  app/main.py             - FastAPI entry point, GZip middleware ✅
+  app/api/currents.py     - API endpoint, MeshData pre-loading, optional fields ✅
+  app/core/tidal_calc.py  - Tidal prediction algorithm ✅
+  app/core/config.py      - Settings (LOCAL/S3 data source) ✅
+```
 
-**Visual Quality:**
-- [ ] Clear flow patterns visible
-- [ ] Tidal cycle changes observable
-- [ ] Strong currents in expected locations
-- [ ] Particles don't "jump" between triangles
+### Key Architecture Notes for Next Session
+- **`currents.py` now uses `MeshData` class** - all arrays pre-loaded into RAM on first request
+- **No more xarray Dataset caching** - replaced with direct numpy arrays
+- **API response no longer includes `bbox`** - was redundant (client already knows it)
+- **`include_elements=true` and `include_depth=true`** are query param defaults; set to `false` to skip
+- **Element remapping uses array lookup** (`idx_map[valid_elements]`) instead of `np.vectorize(dict.get)`
+- **Frontend computes `direction` on-demand** in click handler only (not stored per feature)
+- **Frontend destructures `meshData.nodes`** before loop for faster access
 
-**User Experience:**
-- [ ] Intuitive flow direction
-- [ ] Easy to see current speed
-- [ ] Time controls work smoothly
-- [ ] Pan/zoom doesn't break particles
+### Testing Locations
+- **Woods Hole, MA** (41.52, -70.72) - Strong tidal passage, best for testing
+- **NYC Harbor** (40.7, -74.0) - Complex flow patterns
+- **Miami/Florida Keys** (25.2, -80.5) - Coastal currents
+
+### Visual QC Checklist (for particle animation)
+- [ ] Particles flow smoothly (no jumps or artifacts)
+- [ ] Strong currents in channels/inlets (Woods Hole passage)
+- [ ] Weaker currents in open water
+- [ ] Flow direction changes over 6-hour tidal cycle (+1h button)
+- [ ] 60 FPS performance maintained
+- [ ] Panning works (trails reset, particles respawn)
+- [ ] Time controls update particle flow direction
+
+---
+
+### Session 2026-02-06 (Session 4): API Performance Optimization
+
+**Changes Made:**
+
+1. **`backend/app/main.py`** - Added `GZipMiddleware` from starlette (87% smaller responses)
+
+2. **`backend/app/api/currents.py`** - Major refactor:
+   - Replaced `_ds_cache` (xarray Dataset) with `MeshData` class holding pre-loaded numpy arrays
+   - All static data (lat, lon, depth, elements, u_amp, v_amp, u_phase, v_phase, tidefreqs, constituent_names) loaded into RAM on first request
+   - Eliminated per-request Zarr I/O (was 0.114s for constituent extraction)
+   - Added `include_elements` and `include_depth` optional query params
+   - Replaced `np.vectorize(dict.get)` element remapping with direct array lookup
+   - Removed redundant `bbox` from response
+   - Removed verbose DEBUG print statements (replaced with single summary line)
+
+3. **`frontend/index.html`** - Frontend optimizations:
+   - Destructured `meshData.nodes` before feature loop
+   - Pre-allocated features array with `new Array(n)`
+   - Removed `direction` from per-feature properties (computed on-demand in click handler)
+   - Handles optional `depth` field gracefully
+   - Reduced debounce from 300ms to 100ms
 
 ---
 

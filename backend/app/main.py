@@ -4,6 +4,7 @@ Actual Currents API - Main application entry point
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 from app.api import currents
@@ -13,6 +14,9 @@ app = FastAPI(
     description="Real-time tidal current predictions for the Western North Atlantic",
     version="0.1.0"
 )
+
+# GZip compression for API responses (~80% smaller over network)
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 # CORS middleware for frontend access
 app.add_middleware(

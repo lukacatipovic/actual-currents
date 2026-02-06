@@ -127,7 +127,6 @@
         </div>
         <button id="nowBtn">Jump to Now</button>
         <div id="status">Ready</div>
-        <button id="animateBtn" disabled>Start Animation</button>
     </div>
     <div id="legend">
         <h4>Current Speed</h4>
@@ -149,6 +148,7 @@
         </div>
     </div>
 
+    <script src="js/particles.js"></script>
     <script>
         // Mapbox access token
         mapboxgl.accessToken = 'pk.eyJ1IjoibHVrYWNhdGlwb3ZpYyIsImEiOiJjbWtoZHZxa2wwamR6M2Nvb3Y5cGJubTQwIn0.iuVLjdpQvRkHoxPV9IsUvg';
@@ -223,7 +223,7 @@
             }
 
             setStatus('Loading...', 'loading');
-            loadDebounceTimer = setTimeout(loadMeshData, 300);
+            loadDebounceTimer = setTimeout(loadMeshData, 100);
         }
 
         // Clear mesh data from map (keeps source/layer alive to avoid handler stacking)
@@ -231,6 +231,10 @@
             const source = map.getSource('mesh-nodes');
             if (source) {
                 source.setData({ type: 'FeatureCollection', features: [] });
+            }
+            if (particleSystem) {
+                particleSystem.destroy();
+                particleSystem = null;
             }
             meshData = null;
         }
@@ -271,7 +275,6 @@
                 }
 
                 meshData = await response.json();
-                document.getElementById('animateBtn').disabled = false;
                 visualizeMesh();
 
             } catch (error) {
@@ -286,7 +289,8 @@
             const props = e.features[0].properties;
             const coords = e.features[0].geometry.coordinates.slice();
 
-            let bearing = (props.direction + 90) % 360;
+            const direction = Math.atan2(props.v_vel, props.u_vel) * 180 / Math.PI;
+            let bearing = (direction + 90) % 360;
             if (bearing < 0) bearing += 360;
             const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
             const dirIndex = Math.round(bearing / 45) % 8;
@@ -310,27 +314,23 @@
             if (!meshData) return;
 
             // Build GeoJSON features
-            const features = meshData.nodes.lat.map((lat, i) => {
-                const u = meshData.nodes.u_velocity[i];
-                const v = meshData.nodes.v_velocity[i];
-                const magnitude = Math.sqrt(u * u + v * v);
-                const direction = Math.atan2(v, u) * 180 / Math.PI;
-
-                return {
+            const { lat, lon, u_velocity, v_velocity, depth } = meshData.nodes;
+            const n = lat.length;
+            const features = new Array(n);
+            for (let i = 0; i < n; i++) {
+                const u = u_velocity[i];
+                const v = v_velocity[i];
+                features[i] = {
                     type: 'Feature',
-                    geometry: {
-                        type: 'Point',
-                        coordinates: [meshData.nodes.lon[i], lat]
-                    },
+                    geometry: { type: 'Point', coordinates: [lon[i], lat[i]] },
                     properties: {
-                        depth: meshData.nodes.depth[i],
+                        magnitude: Math.sqrt(u * u + v * v),
                         u_vel: u,
                         v_vel: v,
-                        magnitude: magnitude,
-                        direction: direction
+                        depth: depth ? depth[i] : 0
                     }
                 };
-            });
+            }
 
             const geojsonData = { type: 'FeatureCollection', features: features };
 
@@ -381,14 +381,20 @@
                 `Avg: ${avgMag.toFixed(3)} m/s | Max: ${maxMag.toFixed(3)} m/s`,
                 'success'
             );
-        }
 
-        // Simple particle animation (placeholder - will expand to WebGL)
-        function startAnimation() {
-            if (!meshData) return;
-
-            setStatus('Animation not yet implemented - coming soon!', '');
-            // TODO: Implement WebGL particle system with barycentric interpolation
+            // Auto-start or update particle animation
+            if (!particleSystem) {
+                particleSystem = new ParticleSystem(map, meshData, {
+                    numParticles: 5000,
+                    speedScale: 3000,
+                    maxAge: 100,
+                    trailFade: 0.96,
+                    lineWidth: 1.2
+                });
+                particleSystem.start();
+            } else {
+                particleSystem.updateMeshData(meshData);
+            }
         }
 
         // Time control functions
@@ -414,7 +420,6 @@
         }
 
         // Event listeners
-        document.getElementById('animateBtn').addEventListener('click', startAnimation);
         document.getElementById('prevBtn').addEventListener('click', () => adjustTime(-1));
         document.getElementById('nextBtn').addEventListener('click', () => adjustTime(1));
         document.getElementById('nowBtn').addEventListener('click', jumpToNow);
