@@ -25,14 +25,19 @@ ZARR_OUTPUT = Path(__file__).parent.parent.parent / "data" / "adcirc54.zarr"
 # Main tidal constituents to extract (can adjust this list)
 MAIN_CONSTITUENTS = ['M2', 'S2', 'N2', 'K1', 'O1', 'P1', 'M4', 'M6']
 
+# Spatial ordering method
+# 'hilbert' - Hilbert space-filling curve (best spatial locality, recommended)
+# 'morton'  - Morton Z-order curve (faster computation, good locality)
+SPATIAL_ORDER_METHOD = 'hilbert'
+
 # Spatial chunking configuration
 # Chunk size determines trade-off between query speed and overhead
-# ~50k nodes per chunk is a good balance for 2M total nodes
-SPATIAL_CHUNK_SIZE = 50_000
+# Smaller chunks = faster loading for small viewports, more files
+SPATIAL_CHUNK_SIZE = 10_000  # ~207 chunks for 2M nodes (more granular)
 
 # Element (triangle) chunking
-# ~100k triangles per chunk
-ELEMENT_CHUNK_SIZE = 100_000
+# Smaller chunks for faster element loading
+ELEMENT_CHUNK_SIZE = 50_000
 
 
 def parse_tide_names(tidenames_array):
@@ -57,35 +62,131 @@ def parse_tide_names(tidenames_array):
     return names
 
 
-def create_spatial_sort_index(lat, lon):
+def morton_encode(x, y):
     """
-    Create a spatial sorting index using a simple grid-based approach.
-    This groups nearby nodes together for better spatial locality.
+    Encode 2D coordinates into Morton code (Z-order curve).
+
+    Morton codes interleave the bits of x and y coordinates to create a 1D ordering
+    that preserves 2D spatial locality. Points close in Morton order are close in 2D space.
+
+    Args:
+        x: X coordinate (integer)
+        y: Y coordinate (integer)
+
+    Returns:
+        Morton code (integer)
+    """
+    def part1by1(n):
+        """Spread bits of n by inserting a 0 between each bit."""
+        n &= 0x0000ffff
+        n = (n | (n << 8)) & 0x00FF00FF
+        n = (n | (n << 4)) & 0x0F0F0F0F
+        n = (n | (n << 2)) & 0x33333333
+        n = (n | (n << 1)) & 0x55555555
+        return n
+
+    return part1by1(x) | (part1by1(y) << 1)
+
+
+def hilbert_encode(x, y, order=16):
+    """
+    Encode 2D coordinates into Hilbert curve index.
+
+    Hilbert curves provide better spatial locality than Morton codes by ensuring
+    that the curve never makes large jumps. The curve is continuous and fills space
+    more uniformly than Z-order curves.
+
+    Args:
+        x: X coordinate (integer, 0 to 2^order - 1)
+        y: Y coordinate (integer, 0 to 2^order - 1)
+        order: Order of Hilbert curve (grid size is 2^order x 2^order)
+
+    Returns:
+        Hilbert curve index (integer)
+    """
+    # Hilbert curve distance calculation using rotation-based algorithm
+    d = 0
+    s = order - 1
+
+    while s >= 0:
+        rx = (x >> s) & 1
+        ry = (y >> s) & 1
+        d = (d << 2) | ((3 * rx) ^ ry)
+
+        # Rotate coordinates if needed
+        if ry == 0:
+            if rx == 1:
+                x = (1 << order) - 1 - x
+                y = (1 << order) - 1 - y
+            x, y = y, x
+
+        s -= 1
+
+    return d
+
+
+def create_spatial_sort_index(lat, lon, method='hilbert'):
+    """
+    Create a spatial sorting index using space-filling curves for optimal spatial locality.
+
+    Space-filling curves map 2D coordinates to 1D in a way that preserves spatial proximity.
+    This dramatically improves chunk loading performance for bounding box queries.
 
     Args:
         lat: numpy array of latitudes
         lon: numpy array of longitudes
+        method: 'hilbert' (default, best locality) or 'morton' (Z-order, faster to compute)
 
     Returns:
-        Sorted indices that group spatially close nodes
+        Sorted indices that group spatially close nodes together
     """
-    print("Creating spatial sort index...")
+    print(f"Creating spatial sort index using {method.upper()} curve...")
 
-    # Create a simple grid-based hash for spatial sorting
-    # Divide the space into ~100x100 grid cells
+    # Normalize coordinates to [0, 1]
     lat_normalized = (lat - lat.min()) / (lat.max() - lat.min())
     lon_normalized = (lon - lon.min()) / (lon.max() - lon.min())
 
-    # Create grid cell indices
-    n_grid = 100
-    lat_grid = (lat_normalized * n_grid).astype(int)
-    lon_grid = (lon_normalized * n_grid).astype(int)
+    # Choose grid resolution based on method
+    # Hilbert curve requires power of 2, Morton is more flexible
+    if method == 'hilbert':
+        order = 16  # 2^16 = 65536 x 65536 grid (plenty of resolution)
+        n_grid = 2 ** order
+        print(f"  Using order-{order} Hilbert curve ({n_grid:,} x {n_grid:,} grid)")
+    else:  # morton
+        order = 16  # Use same resolution for fair comparison
+        n_grid = 2 ** order
+        print(f"  Using {n_grid:,} x {n_grid:,} grid for Morton encoding")
 
-    # Create a combined spatial key for sorting
-    spatial_key = lat_grid * (n_grid + 1) + lon_grid
+    # Convert to integer grid coordinates
+    # Clip to [0, n_grid-1] to handle edge cases
+    lat_grid = np.clip((lat_normalized * (n_grid - 1)).astype(np.uint32), 0, n_grid - 1)
+    lon_grid = np.clip((lon_normalized * (n_grid - 1)).astype(np.uint32), 0, n_grid - 1)
+
+    print(f"  Computing space-filling curve indices for {len(lat):,} nodes...")
+    start = time.time()
+
+    # Compute spatial keys using chosen method
+    if method == 'hilbert':
+        # Vectorized Hilbert encoding
+        spatial_keys = np.array([
+            hilbert_encode(int(x), int(y), order)
+            for x, y in zip(lon_grid, lat_grid)
+        ], dtype=np.uint64)
+    else:  # morton
+        # Vectorized Morton encoding
+        spatial_keys = np.array([
+            morton_encode(int(x), int(y))
+            for x, y in zip(lon_grid, lat_grid)
+        ], dtype=np.uint64)
+
+    elapsed = time.time() - start
+    print(f"  Computed spatial keys in {elapsed:.2f}s")
 
     # Sort by spatial key to group nearby nodes
-    sorted_indices = np.argsort(spatial_key)
+    print(f"  Sorting {len(spatial_keys):,} indices...")
+    sorted_indices = np.argsort(spatial_keys)
+
+    print(f"✓ Spatial sorting complete using {method.upper()} curve")
 
     return sorted_indices
 
@@ -163,8 +264,8 @@ def convert_to_zarr():
     lon = ds['lon'].values
     depth = ds['depth'].values
 
-    # Create spatial sorting index
-    spatial_sort_idx = create_spatial_sort_index(lat, lon)
+    # Create spatial sorting index using space-filling curve
+    spatial_sort_idx = create_spatial_sort_index(lat, lon, method=SPATIAL_ORDER_METHOD)
 
     # Apply spatial sorting to coordinates
     lat_sorted = lat[spatial_sort_idx]
@@ -285,7 +386,7 @@ def convert_to_zarr():
             'model': 'ADCIRC',
             'grid_type': 'Irregular triangular mesh',
             'institution': 'NOAA/NOS/OCS/CSDL/MMAP',
-            'spatial_sorting': 'Grid-based spatial locality',
+            'spatial_sorting': f'{SPATIAL_ORDER_METHOD.capitalize()} space-filling curve (order-16)',
             'chunk_size_nodes': SPATIAL_CHUNK_SIZE,
             'chunk_size_elements': ELEMENT_CHUNK_SIZE,
             'created': time.strftime('%Y-%m-%d %H:%M:%S'),

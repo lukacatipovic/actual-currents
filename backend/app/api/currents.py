@@ -62,15 +62,23 @@ async def get_mesh_data(
 
         # Query nodes in bounding box
         print(f"DEBUG: Querying nodes for bbox [{min_lat}, {max_lat}] x [{min_lon}, {max_lon}]")
-        lat_mask = (ds['lat'] >= min_lat) & (ds['lat'] <= max_lat)
-        lon_mask = (ds['lon'] >= min_lon) & (ds['lon'] <= max_lon)
-        bbox_mask = lat_mask & lon_mask
+        query_start = time_module.time()
 
-        # Get node data
-        nodes_ds = ds.where(bbox_mask, drop=True)
+        # Use direct numpy array operations (MUCH faster than xarray .where())
+        lat_array = ds['lat'].values
+        lon_array = ds['lon'].values
 
-        num_nodes = int(nodes_ds.sizes['node'])
-        print(f"DEBUG: Found {num_nodes} nodes in {time_module.time() - start_time:.2f}s")
+        # Create boolean mask using numpy (fast!)
+        bbox_mask = (
+            (lat_array >= min_lat) & (lat_array <= max_lat) &
+            (lon_array >= min_lon) & (lon_array <= max_lon)
+        )
+
+        # Get node indices directly from mask
+        node_indices = np.where(bbox_mask)[0]
+        num_nodes = len(node_indices)
+
+        print(f"DEBUG: Found {num_nodes} nodes in {time_module.time() - query_start:.3f}s")
 
         if num_nodes == 0:
             raise HTTPException(status_code=404, detail="No nodes found in bounding box")
@@ -81,8 +89,6 @@ async def get_mesh_data(
                 detail=f"Too many nodes ({num_nodes}). Please use a smaller bounding box."
             )
 
-        # Get node indices that are in the bounding box
-        node_indices = np.where(bbox_mask.values)[0]
         node_indices_set = set(node_indices)
         print(f"DEBUG: Built node index set in {time_module.time() - start_time:.2f}s")
 
@@ -122,13 +128,13 @@ async def get_mesh_data(
 
         print(f"DEBUG: Remapped elements in {time_module.time() - remap_start:.2f}s")
 
-        # Extract node data
+        # Extract node data using direct numpy indexing (FAST!)
         print(f"DEBUG: Extracting node data...")
         extract_start = time_module.time()
-        lats = nodes_ds['lat'].values.tolist()
-        lons = nodes_ds['lon'].values.tolist()
-        depths = nodes_ds['depth'].values.tolist()
-        print(f"DEBUG: Extracted node arrays in {time_module.time() - extract_start:.2f}s")
+        lats = lat_array[node_indices].tolist()
+        lons = lon_array[node_indices].tolist()
+        depths = ds['depth'].values[node_indices].tolist()
+        print(f"DEBUG: Extracted node arrays in {time_module.time() - extract_start:.3f}s")
 
         # Parse time parameter or use current time
         if time:
@@ -141,16 +147,16 @@ async def get_mesh_data(
 
         print(f"DEBUG: Prediction time: {prediction_time.isoformat()}")
 
-        # Extract constituent data for tidal prediction
+        # Extract constituent data for tidal prediction using direct indexing
         print(f"DEBUG: Extracting constituent data...")
         const_start = time_module.time()
-        u_amp = nodes_ds['u_amp'].values  # Shape: (n_nodes, n_constituents)
-        v_amp = nodes_ds['v_amp'].values
-        u_phase = nodes_ds['u_phase'].values  # In degrees
-        v_phase = nodes_ds['v_phase'].values
+        u_amp = ds['u_amp'].values[node_indices, :]  # Shape: (n_nodes, n_constituents)
+        v_amp = ds['v_amp'].values[node_indices, :]
+        u_phase = ds['u_phase'].values[node_indices, :]  # In degrees
+        v_phase = ds['v_phase'].values[node_indices, :]
         tidefreqs = ds['tidefreqs'].values  # Shape: (n_constituents,)
         constituent_names = [str(name) for name in ds['constituent_names'].values]
-        print(f"DEBUG: Extracted constituent arrays in {time_module.time() - const_start:.2f}s")
+        print(f"DEBUG: Extracted constituent arrays in {time_module.time() - const_start:.3f}s")
         print(f"DEBUG: Constituent data shapes - u_amp: {u_amp.shape}, tidefreqs: {tidefreqs.shape}")
 
         # Predict current velocities using harmonic synthesis
@@ -198,7 +204,7 @@ async def get_mesh_data(
                 "count": len(elements_remapped),
                 "triangles": elements_remapped.tolist() if len(elements_remapped) > 0 else []
             },
-            "constituents": [str(name) for name in nodes_ds['constituent_names'].values]
+            "constituents": constituent_names
         }
 
     except HTTPException:

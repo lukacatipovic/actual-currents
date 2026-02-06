@@ -125,9 +125,8 @@
             <input type="datetime-local" id="timeInput" />
             <button class="time-btn" id="nextBtn">+1h</button>
         </div>
-        <button id="loadBtn">Load Current Data</button>
         <button id="nowBtn">Jump to Now</button>
-        <div id="status">Ready to load data</div>
+        <div id="status">Ready</div>
         <button id="animateBtn" disabled>Start Animation</button>
     </div>
     <div id="legend">
@@ -171,6 +170,11 @@
         let particleSystem = null;
         let currentTime = new Date();
 
+        // Auto-load configuration
+        const MIN_ZOOM_FOR_DATA = 8;
+        let loadDebounceTimer = null;
+        let currentAbortController = null;
+
         // Status helpers
         const status = document.getElementById('status');
         function setStatus(msg, type = '') {
@@ -204,61 +208,113 @@
         // Initialize time
         updateTimeDisplay();
 
+        // Schedule a debounced data load (called on pan/zoom/time change)
+        function scheduleLoad() {
+            clearTimeout(loadDebounceTimer);
+
+            if (map.getZoom() < MIN_ZOOM_FOR_DATA) {
+                // Cancel in-flight request if zoomed out
+                if (currentAbortController) {
+                    currentAbortController.abort();
+                }
+                clearMesh();
+                setStatus(`Zoom in to see tidal currents (zoom ${Math.floor(map.getZoom())}/${MIN_ZOOM_FOR_DATA}+)`, '');
+                return;
+            }
+
+            setStatus('Loading...', 'loading');
+            loadDebounceTimer = setTimeout(loadMeshData, 300);
+        }
+
+        // Clear mesh data from map (keeps source/layer alive to avoid handler stacking)
+        function clearMesh() {
+            const source = map.getSource('mesh-nodes');
+            if (source) {
+                source.setData({ type: 'FeatureCollection', features: [] });
+            }
+            meshData = null;
+        }
+
         // Load mesh data from API
         async function loadMeshData() {
+            // Cancel any in-flight request
+            if (currentAbortController) {
+                currentAbortController.abort();
+            }
+            currentAbortController = new AbortController();
+
             const bounds = map.getBounds();
             const minLat = bounds.getSouth();
             const maxLat = bounds.getNorth();
             const minLon = bounds.getWest();
             const maxLon = bounds.getEast();
 
-            setStatus('Loading mesh data...', 'loading');
-            document.getElementById('loadBtn').disabled = true;
-
             try {
-                // Format time as ISO 8601
                 const timeStr = currentTime.toISOString();
                 const url = `${API_BASE}/mesh?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&time=${timeStr}`;
 
                 console.log('Fetching:', url);
-                const response = await fetch(url);
+                const response = await fetch(url, { signal: currentAbortController.signal });
 
                 if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${await response.text()}`);
+                    const text = await response.text();
+                    if (response.status === 400 && text.includes('Too many nodes')) {
+                        setStatus('Too many nodes - zoom in more', '');
+                        return;
+                    }
+                    if (response.status === 404) {
+                        clearMesh();
+                        setStatus('No tidal data in this area', '');
+                        return;
+                    }
+                    throw new Error(`HTTP ${response.status}: ${text}`);
                 }
 
                 meshData = await response.json();
-
-                setStatus(`Loaded ${meshData.nodes.count.toLocaleString()} nodes, ${meshData.elements.count.toLocaleString()} triangles`, 'success');
                 document.getElementById('animateBtn').disabled = false;
-
-                // Visualize mesh on map
                 visualizeMesh();
 
             } catch (error) {
+                if (error.name === 'AbortError') return; // Cancelled by newer request
                 setStatus(`Error: ${error.message}`, 'error');
                 console.error('Failed to load mesh:', error);
-            } finally {
-                document.getElementById('loadBtn').disabled = false;
             }
+        }
+
+        // Click handler for node details (defined once, not per-render)
+        function handleNodeClick(e) {
+            const props = e.features[0].properties;
+            const coords = e.features[0].geometry.coordinates.slice();
+
+            let bearing = (props.direction + 90) % 360;
+            if (bearing < 0) bearing += 360;
+            const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+            const dirIndex = Math.round(bearing / 45) % 8;
+            const dirText = directions[dirIndex];
+
+            new mapboxgl.Popup()
+                .setLngLat(coords)
+                .setHTML(`
+                    <strong>Tidal Current</strong><br/>
+                    <strong>Speed:</strong> ${props.magnitude.toFixed(3)} m/s<br/>
+                    <strong>Direction:</strong> ${bearing.toFixed(0)}° (${dirText})<br/>
+                    <strong>U (East):</strong> ${props.u_vel.toFixed(3)} m/s<br/>
+                    <strong>V (North):</strong> ${props.v_vel.toFixed(3)} m/s<br/>
+                    <strong>Depth:</strong> ${props.depth.toFixed(1)} m
+                `)
+                .addTo(map);
         }
 
         // Visualize mesh as points colored by velocity magnitude
         function visualizeMesh() {
             if (!meshData) return;
 
-            // Remove existing layer if any
-            if (map.getLayer('mesh-nodes')) {
-                map.removeLayer('mesh-nodes');
-                map.removeSource('mesh-nodes');
-            }
-
-            // Calculate velocity magnitude for each node
+            // Build GeoJSON features
             const features = meshData.nodes.lat.map((lat, i) => {
                 const u = meshData.nodes.u_velocity[i];
                 const v = meshData.nodes.v_velocity[i];
                 const magnitude = Math.sqrt(u * u + v * v);
-                const direction = Math.atan2(v, u) * 180 / Math.PI; // degrees from east
+                const direction = Math.atan2(v, u) * 180 / Math.PI;
 
                 return {
                     type: 'Feature',
@@ -276,78 +332,55 @@
                 };
             });
 
-            map.addSource('mesh-nodes', {
-                type: 'geojson',
-                data: {
-                    type: 'FeatureCollection',
-                    features: features
-                }
-            });
+            const geojsonData = { type: 'FeatureCollection', features: features };
 
-            // Color nodes by velocity magnitude
-            map.addLayer({
-                id: 'mesh-nodes',
-                type: 'circle',
-                source: 'mesh-nodes',
-                paint: {
-                    'circle-radius': 3,
-                    'circle-color': [
-                        'interpolate',
-                        ['linear'],
-                        ['get', 'magnitude'],
-                        0.0, '#0000ff',    // Blue: calm
-                        0.3, '#00ff00',    // Green: moderate
-                        0.6, '#ffff00',    // Yellow: strong
-                        1.0, '#ff0000',    // Red: very strong
-                        2.0, '#ff0000'     // Cap at red
-                    ],
-                    'circle-opacity': 0.7
-                }
-            });
+            // Update existing source or create new one (avoids handler stacking)
+            const existingSource = map.getSource('mesh-nodes');
+            if (existingSource) {
+                existingSource.setData(geojsonData);
+            } else {
+                map.addSource('mesh-nodes', { type: 'geojson', data: geojsonData });
 
-            // Calculate statistics
+                map.addLayer({
+                    id: 'mesh-nodes',
+                    type: 'circle',
+                    source: 'mesh-nodes',
+                    paint: {
+                        'circle-radius': 3,
+                        'circle-color': [
+                            'interpolate',
+                            ['linear'],
+                            ['get', 'magnitude'],
+                            0.0, '#0000ff',
+                            0.3, '#00ff00',
+                            0.6, '#ffff00',
+                            1.0, '#ff0000',
+                            2.0, '#ff0000'
+                        ],
+                        'circle-opacity': 0.7
+                    }
+                });
+
+                // Register event handlers once
+                map.on('click', 'mesh-nodes', handleNodeClick);
+                map.on('mouseenter', 'mesh-nodes', () => {
+                    map.getCanvas().style.cursor = 'pointer';
+                });
+                map.on('mouseleave', 'mesh-nodes', () => {
+                    map.getCanvas().style.cursor = '';
+                });
+            }
+
+            // Update statistics
             const magnitudes = features.map(f => f.properties.magnitude);
             const maxMag = Math.max(...magnitudes);
             const avgMag = magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length;
 
             setStatus(
-                `Visualized ${features.length.toLocaleString()} nodes | ` +
+                `${features.length.toLocaleString()} nodes | ` +
                 `Avg: ${avgMag.toFixed(3)} m/s | Max: ${maxMag.toFixed(3)} m/s`,
                 'success'
             );
-
-            // Add click handler for node details
-            map.on('click', 'mesh-nodes', (e) => {
-                const props = e.features[0].properties;
-                const coords = e.features[0].geometry.coordinates.slice();
-
-                // Format direction as compass bearing
-                let bearing = (props.direction + 90) % 360; // Convert from math to compass
-                if (bearing < 0) bearing += 360;
-                const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-                const dirIndex = Math.round(bearing / 45) % 8;
-                const dirText = directions[dirIndex];
-
-                new mapboxgl.Popup()
-                    .setLngLat(coords)
-                    .setHTML(`
-                        <strong>Tidal Current</strong><br/>
-                        <strong>Speed:</strong> ${props.magnitude.toFixed(3)} m/s<br/>
-                        <strong>Direction:</strong> ${bearing.toFixed(0)}° (${dirText})<br/>
-                        <strong>U (East):</strong> ${props.u_vel.toFixed(3)} m/s<br/>
-                        <strong>V (North):</strong> ${props.v_vel.toFixed(3)} m/s<br/>
-                        <strong>Depth:</strong> ${props.depth.toFixed(1)} m
-                    `)
-                    .addTo(map);
-            });
-
-            // Change cursor on hover
-            map.on('mouseenter', 'mesh-nodes', () => {
-                map.getCanvas().style.cursor = 'pointer';
-            });
-            map.on('mouseleave', 'mesh-nodes', () => {
-                map.getCanvas().style.cursor = '';
-            });
         }
 
         // Simple particle animation (placeholder - will expand to WebGL)
@@ -362,17 +395,13 @@
         function adjustTime(hours) {
             currentTime = new Date(currentTime.getTime() + hours * 60 * 60 * 1000);
             updateTimeDisplay();
-            if (meshData) {
-                loadMeshData(); // Reload with new time
-            }
+            scheduleLoad();
         }
 
         function jumpToNow() {
             currentTime = new Date();
             updateTimeDisplay();
-            if (meshData) {
-                loadMeshData(); // Reload with current time
-            }
+            scheduleLoad();
         }
 
         function handleTimeInputChange(e) {
@@ -380,27 +409,28 @@
             if (!isNaN(newTime.getTime())) {
                 currentTime = newTime;
                 updateTimeDisplay();
-                if (meshData) {
-                    loadMeshData(); // Reload with new time
-                }
+                scheduleLoad();
             }
         }
 
         // Event listeners
-        document.getElementById('loadBtn').addEventListener('click', loadMeshData);
         document.getElementById('animateBtn').addEventListener('click', startAnimation);
         document.getElementById('prevBtn').addEventListener('click', () => adjustTime(-1));
         document.getElementById('nextBtn').addEventListener('click', () => adjustTime(1));
         document.getElementById('nowBtn').addEventListener('click', jumpToNow);
         document.getElementById('timeInput').addEventListener('change', handleTimeInputChange);
 
-        // Load data when map is ready and moves
+        // Auto-load on pan/zoom
+        map.on('moveend', scheduleLoad);
+
+        // Auto-load on initial map load
         map.on('load', () => {
-            setStatus('Map ready - click "Load Current Data" to begin', 'success');
+            scheduleLoad();
         });
 
-        console.log('Actual Currents Visualization initialized');
+        console.log('Actual Currents Visualization initialized (auto-load enabled)');
         console.log('API endpoint:', API_BASE);
+        console.log('Min zoom for data:', MIN_ZOOM_FOR_DATA);
     </script>
 </body>
 </html>
