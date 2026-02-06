@@ -30,6 +30,10 @@ MAIN_CONSTITUENTS = ['M2', 'S2', 'N2', 'K1', 'O1', 'P1', 'M4', 'M6']
 # ~50k nodes per chunk is a good balance for 2M total nodes
 SPATIAL_CHUNK_SIZE = 50_000
 
+# Element (triangle) chunking
+# ~100k triangles per chunk
+ELEMENT_CHUNK_SIZE = 100_000
+
 
 def parse_tide_names(tidenames_array):
     """
@@ -84,6 +88,36 @@ def create_spatial_sort_index(lat, lon):
     sorted_indices = np.argsort(spatial_key)
 
     return sorted_indices
+
+
+def remap_elements(elements_nc, spatial_sort_idx):
+    """
+    Remap element connectivity to spatially sorted node indices.
+
+    Args:
+        elements_nc: Element array from netCDF (nele, 3) with original indices
+        spatial_sort_idx: Array mapping new_idx -> original_idx
+
+    Returns:
+        Remapped elements array with sorted node indices
+    """
+    print("Remapping element connectivity to sorted node indices...")
+
+    # Create inverse mapping: original_idx -> new_idx
+    inverse_mapping = np.zeros(len(spatial_sort_idx), dtype=np.int32)
+    for new_idx, orig_idx in enumerate(spatial_sort_idx):
+        inverse_mapping[orig_idx] = new_idx
+
+    # Remap all element indices
+    elements_sorted = inverse_mapping[elements_nc]
+
+    # Validate
+    if elements_sorted.min() < 0 or elements_sorted.max() >= len(spatial_sort_idx):
+        raise ValueError(f"Invalid element indices after remapping!")
+
+    print(f"✓ Element indices remapped and validated")
+
+    return elements_sorted
 
 
 def convert_to_zarr():
@@ -141,6 +175,29 @@ def convert_to_zarr():
     print(f"  Latitude:  {lat.min():.2f}° to {lat.max():.2f}°")
     print(f"  Longitude: {lon.min():.2f}° to {lon.max():.2f}°")
     print(f"  Depth:     {depth.min():.2f}m to {depth.max():.2f}m")
+    print()
+
+    # Extract mesh connectivity (triangular elements)
+    print("Extracting mesh connectivity...")
+    elements_nc = ds['ele'].values  # Shape: (3, nele)
+
+    # Convert from 1-based (Fortran) to 0-based (Python) indexing
+    elements_nc = elements_nc.astype(np.int32) - 1
+
+    # Transpose to (nele, 3) for easier handling
+    elements_nc = elements_nc.T
+
+    print(f"Loaded {elements_nc.shape[0]:,} triangular elements")
+
+    # Remap element indices to spatially sorted node ordering
+    elements_sorted = remap_elements(elements_nc, spatial_sort_idx)
+    print()
+
+    # Extract tide frequencies for main constituents
+    print("Extracting tide frequencies for main constituents...")
+    tidefreqs_all = ds['tidefreqs'].values
+    tidefreqs = tidefreqs_all[constituent_indices]  # Use the list of indices
+    print(f"Extracted {len(tidefreqs)} tide frequencies (from {len(tidefreqs_all)} total)")
     print()
 
     # Extract and sort amplitude and phase data for main constituents
@@ -208,6 +265,16 @@ def convert_to_zarr():
                 'units': 'degrees',
                 'description': 'Phase of northward (v) velocity component'
             }),
+            'elements': (['element', 'nv'], elements_sorted, {
+                'long_name': 'Triangular element connectivity',
+                'description': 'Node indices (0-based) forming each triangle',
+                'standard_name': 'face_node_connectivity'
+            }),
+            'tidefreqs': (['constituent'], tidefreqs, {
+                'long_name': 'Tide constituent frequencies',
+                'units': 'radians per second',
+                'description': 'Angular frequency of each tidal constituent'
+            }),
             'constituent_names': (['constituent'], found_constituents, {
                 'long_name': 'Tidal constituent names'
             }),
@@ -219,7 +286,8 @@ def convert_to_zarr():
             'grid_type': 'Irregular triangular mesh',
             'institution': 'NOAA/NOS/OCS/CSDL/MMAP',
             'spatial_sorting': 'Grid-based spatial locality',
-            'chunk_size': SPATIAL_CHUNK_SIZE,
+            'chunk_size_nodes': SPATIAL_CHUNK_SIZE,
+            'chunk_size_elements': ELEMENT_CHUNK_SIZE,
             'created': time.strftime('%Y-%m-%d %H:%M:%S'),
         }
     )
@@ -233,9 +301,12 @@ def convert_to_zarr():
     # Define chunking strategy
     # Chunk along the node dimension for spatial queries
     # Keep all constituents together since they're usually queried together
+    # Chunk elements for efficient mesh queries
     chunks = {
         'node': SPATIAL_CHUNK_SIZE,
-        'constituent': len(found_constituents)
+        'element': ELEMENT_CHUNK_SIZE,
+        'constituent': len(found_constituents),
+        'nv': 3  # Always 3 vertices per triangle
     }
 
     # Write to Zarr format
