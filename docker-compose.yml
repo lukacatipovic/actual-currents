@@ -1,0 +1,12 @@
+services:
+  actual-currents:
+    build: .
+    ports:
+      - "80:8000"
+    env_file:
+      - .env.production
+    volumes:
+      # Mount AWS credentials from host (fallback if no IAM role)
+      - ~/.aws:/root/.aws:ro
+    restart: unless-stopped
+    # Recommended: t3.small (2 GB RAM). Dataset loads ~670 MB into memory.

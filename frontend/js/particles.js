@@ -6,7 +6,7 @@
  *
  * Two classes:
  *   TriangleSpatialIndex - Grid lookup for "which triangle contains point?"
- *   ParticleSystem       - Canvas2D overlay with trail-effect rendering
+ *   ParticleSystem       - Canvas2D overlay with trail-effect rendering + vector arrows
  */
 
 const PARTICLE_DEBUG = false;
@@ -131,6 +131,7 @@ class ParticleSystem {
         this.maxAge = opts.maxAge || 100;
         this.trailFade = opts.trailFade || 0.96;
         this.lineWidth = opts.lineWidth || 1.5;
+        this.colorMode = opts.colorMode || 'colored-particles';
 
         this._frameSkip = opts.frameSkip || 1;
         this._frameCounter = 0;
@@ -160,14 +161,26 @@ class ParticleSystem {
             this._buildFromMeshData(meshData);
             this._createCanvas();
 
-            this._onMove = () => { this._isMoving = true; };
+            this._onMove = () => { 
+                this._isMoving = true;
+            };
             this._onMoveEnd = () => {
                 this._isMoving = false;
                 if (this._ctx) {
                     this._ctx.clearRect(0, 0, this._canvas.clientWidth, this._canvas.clientHeight);
+                    // Re-render vectors if in vector mode
+                    if (this.colorMode === 'vector-arrows') {
+                        this.renderVectorField();
+                    }
                 }
             };
-            this._onResize = () => { this._syncCanvasSize(); };
+            this._onResize = () => { 
+                this._syncCanvasSize();
+                // Re-render vectors if in vector mode
+                if (this.colorMode === 'vector-arrows' && this._ctx) {
+                    this.renderVectorField();
+                }
+            };
 
             map.on('move', this._onMove);
             map.on('moveend', this._onMoveEnd);
@@ -329,11 +342,101 @@ class ParticleSystem {
         return 9;
     }
 
+    // ─── Vector Field Rendering ──────────────────────────────────────
+
+    renderVectorField() {
+        const ctx = this._ctx;
+        if (!ctx) return;
+
+        const w = this._canvas.clientWidth;
+        const h = this._canvas.clientHeight;
+
+        // Clear canvas
+        ctx.clearRect(0, 0, w, h);
+
+        // Calculate arrow length scale based on zoom
+        const zoom = this.map.getZoom();
+        const arrowScale = 10 * Math.pow(1.5, zoom - 10); // Adjust scaling as needed
+
+        // Draw arrows for each node
+        for (let i = 0; i < this._lats.length; i++) {
+            const lat = this._lats[i];
+            const lon = this._lons[i];
+            const u = this._u[i];
+            const v = this._v[i];
+            const speed = this._speed[i];
+
+            // Get screen position
+            const pos = this.map.project([lon, lat]);
+            
+            // Skip if off-screen
+            if (pos.x < -50 || pos.x > w + 50 || pos.y < -50 || pos.y > h + 50) continue;
+
+            // Calculate arrow endpoint
+            const arrowLength = speed * arrowScale;
+            
+            // Convert U,V to screen coordinates
+            // U is eastward (positive x in screen)
+            // V is northward (negative y in screen, since y increases downward)
+            const endX = pos.x + u * arrowScale;
+            const endY = pos.y - v * arrowScale;
+
+            // Draw arrow
+            this._drawArrow(ctx, pos.x, pos.y, endX, endY, speed);
+        }
+
+        if (PARTICLE_DEBUG) {
+            console.log(`[VectorField] Rendered ${this._lats.length} arrows`);
+        }
+    }
+
+    _drawArrow(ctx, x1, y1, x2, y2, speed) {
+        const headLength = 8; // Length of arrow head
+        const headAngle = Math.PI / 6; // Angle of arrow head (30 degrees)
+
+        // Get color based on speed
+        const color = this._speedToColor(speed);
+
+        // Calculate angle of the arrow
+        const angle = Math.atan2(y2 - y1, x2 - x1);
+
+        // Draw arrow shaft
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        // Draw arrow head
+        ctx.beginPath();
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(
+            x2 - headLength * Math.cos(angle - headAngle),
+            y2 - headLength * Math.sin(angle - headAngle)
+        );
+        ctx.moveTo(x2, y2);
+        ctx.lineTo(
+            x2 - headLength * Math.cos(angle + headAngle),
+            y2 - headLength * Math.sin(angle + headAngle)
+        );
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+    }
+
     // ─── Public API ──────────────────────────────────────────────────
 
     start() {
         if (this._running) return;
         this._running = true;
+        
+        // Vector mode doesn't use particle animation
+        if (this.colorMode === 'vector-arrows') {
+            this.renderVectorField();
+            return;
+        }
+        
         this._initParticles();
         console.log(`ParticleSystem: started (${this.numParticles} particles, ` +
             `${this._triangles ? this._triangles.length : 0} triangles)`);
@@ -373,12 +476,42 @@ class ParticleSystem {
 
     updateMeshData(meshData) {
         this._buildFromMeshData(meshData);
-        if (this._running) {
+        
+        if (this.colorMode === 'vector-arrows') {
+            // Just re-render the vector field
+            this.renderVectorField();
+        } else if (this._running) {
+            // Re-initialize particles for animation modes
             this._initParticles();
             if (this._ctx) {
                 this._ctx.clearRect(0, 0, this._canvas.clientWidth, this._canvas.clientHeight);
             }
         }
+    }
+
+    setColorMode(mode) {
+        const oldMode = this.colorMode;
+        this.colorMode = mode;
+        
+        // Clear canvas when switching modes
+        if (this._ctx) {
+            this._ctx.clearRect(0, 0, this._canvas.clientWidth, this._canvas.clientHeight);
+        }
+        
+        // Handle mode transitions
+        if (mode === 'vector-arrows') {
+            // Stop any running animation
+            if (this._running) {
+                this.stop();
+            }
+            // Render static vectors
+            this.renderVectorField();
+        } else if (oldMode === 'vector-arrows') {
+            // Switching from vectors to particles - don't auto-start
+            // Let the UI handle starting the animation
+        }
+        
+        console.log(`ParticleSystem: color mode set to ${mode}`);
     }
 
     // ─── Animation Loop ──────────────────────────────────────────────
@@ -483,32 +616,18 @@ class ParticleSystem {
         ctx.fillRect(0, 0, w, h);
         ctx.globalCompositeOperation = 'source-over';
 
-        // Draw particles grouped by color bucket for efficient batched strokes
-        const bucketColors = [
-            'rgba(50, 80, 200, 0.75)',
-            'rgba(40, 120, 230, 0.8)',
-            'rgba(0, 180, 240, 0.85)',
-            'rgba(0, 220, 180, 0.85)',
-            'rgba(0, 240, 120, 0.9)',
-            'rgba(100, 240, 60, 0.9)',
-            'rgba(180, 240, 0, 0.9)',
-            'rgba(240, 220, 0, 0.95)',
-            'rgba(255, 160, 0, 0.95)',
-            'rgba(255, 40, 40, 0.95)',
-        ];
-
         ctx.lineWidth = this.lineWidth;
         ctx.lineCap = 'round';
 
-        for (let b = 0; b < bucketColors.length; b++) {
-            ctx.strokeStyle = bucketColors[b];
+        if (this.colorMode === 'white-particles') {
+            // WHITE PARTICLES for overlay mode
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
             ctx.beginPath();
             let hasSegments = false;
 
             for (let i = 0; i < this._particles.length; i++) {
                 const p = this._particles[i];
                 if (isNaN(p.prevLat)) continue;
-                if (this._getColorBucket(p.speed) !== b) continue;
 
                 const prev = this.map.project([p.prevLon, p.prevLat]);
                 const curr = this.map.project([p.lon, p.lat]);
@@ -521,6 +640,44 @@ class ParticleSystem {
             }
 
             if (hasSegments) ctx.stroke();
+
+        } else {
+            // COLORED PARTICLES (original behavior)
+            const bucketColors = [
+                'rgba(50, 80, 200, 0.75)',
+                'rgba(40, 120, 230, 0.8)',
+                'rgba(0, 180, 240, 0.85)',
+                'rgba(0, 220, 180, 0.85)',
+                'rgba(0, 240, 120, 0.9)',
+                'rgba(100, 240, 60, 0.9)',
+                'rgba(180, 240, 0, 0.9)',
+                'rgba(240, 220, 0, 0.95)',
+                'rgba(255, 160, 0, 0.95)',
+                'rgba(255, 40, 40, 0.95)',
+            ];
+
+            for (let b = 0; b < bucketColors.length; b++) {
+                ctx.strokeStyle = bucketColors[b];
+                ctx.beginPath();
+                let hasSegments = false;
+
+                for (let i = 0; i < this._particles.length; i++) {
+                    const p = this._particles[i];
+                    if (isNaN(p.prevLat)) continue;
+                    if (this._getColorBucket(p.speed) !== b) continue;
+
+                    const prev = this.map.project([p.prevLon, p.prevLat]);
+                    const curr = this.map.project([p.lon, p.lat]);
+
+                    if (prev.x < -50 || prev.x > w + 50 || prev.y < -50 || prev.y > h + 50) continue;
+
+                    ctx.moveTo(prev.x, prev.y);
+                    ctx.lineTo(curr.x, curr.y);
+                    hasSegments = true;
+                }
+
+                if (hasSegments) ctx.stroke();
+            }
         }
     }
 }

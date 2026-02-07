@@ -1,0 +1,42 @@
+# Data files (loaded from S3 in production)
+data/
+
+# Python virtual environment
+backend/tides/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Archive
+old/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environment files (use docker-compose env instead)
+.env
+.env.*
+backend/.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+.claude/
+
+# Scripts and docs (not needed at runtime)
+backend/scripts/
+backend/test/
+*.md
+
+# Large source data
+*.nc

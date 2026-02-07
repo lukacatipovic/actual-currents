@@ -2,135 +2,636 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="theme-color" content="#2196F3">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Actual Currents - Tidal Flow Visualization</title>
     <script src='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css' rel='stylesheet' />
-    <link rel="stylesheet" href="css/styles.css" />
-    <link rel="manifest" href="manifest.json">
-    <link rel="apple-touch-icon" href="icons/icon-192.png">
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0a0e27;
+            color: #e0e6ed;
+        }
+
+        #map {
+            position: absolute;
+            top: 0;
+            bottom: 0;
+            width: 100%;
+        }
+
+        /* Side Panel */
+        #sidePanel {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 340px;
+            height: 100vh;
+            background: linear-gradient(180deg, #1a1f3a 0%, #0f1429 100%);
+            box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            overflow-y: auto;
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        #sidePanel.collapsed {
+            transform: translateX(-340px);
+        }
+
+        #togglePanel {
+            position: absolute;
+            top: 20px;
+            left: 350px;
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 0 8px 8px 0;
+            cursor: pointer;
+            z-index: 999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 2px 2px 10px rgba(0, 0, 0, 0.3);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #sidePanel.collapsed + #togglePanel {
+            left: 10px;
+            border-radius: 8px;
+        }
+
+        #togglePanel:hover {
+            transform: scale(1.05);
+            box-shadow: 2px 2px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        #togglePanel svg {
+            width: 20px;
+            height: 20px;
+            fill: white;
+            transition: transform 0.3s;
+        }
+
+        #sidePanel.collapsed + #togglePanel svg {
+            transform: rotate(180deg);
+        }
+
+        .panel-content {
+            padding: 25px;
+        }
+
+        .panel-header {
+            margin-bottom: 30px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .panel-header h1 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .panel-header p {
+            margin: 8px 0 0 0;
+            font-size: 13px;
+            color: #8892b0;
+        }
+
+        .section {
+            margin-bottom: 28px;
+        }
+
+        .section-title {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: #8892b0;
+            margin-bottom: 12px;
+        }
+
+        /* Time Controls */
+        #currentTime {
+            font-size: 13px;
+            color: #64ffda;
+            margin-bottom: 12px;
+            padding: 10px;
+            background: rgba(100, 255, 218, 0.05);
+            border-radius: 6px;
+            border-left: 3px solid #64ffda;
+        }
+
+        .time-controls {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .time-controls input {
+            flex: 1;
+            padding: 10px 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: #e0e6ed;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .time-controls input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: rgba(255, 255, 255, 0.08);
+        }
+
+        .time-btn {
+            width: 42px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            color: #e0e6ed;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+
+        .time-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            border-color: #667eea;
+        }
+
+        button {
+            width: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.2s;
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.2);
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            background: rgba(255, 255, 255, 0.1);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        /* Basemap Selector */
+        .basemap-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .basemap-option {
+            padding: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            cursor: pointer;
+            text-align: center;
+            font-size: 13px;
+            transition: all 0.2s;
+        }
+
+        .basemap-option:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(102, 126, 234, 0.5);
+        }
+
+        .basemap-option.active {
+            background: rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+            color: #64ffda;
+        }
+
+        /* Animation Type Selector */
+        .animation-options {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .animation-option {
+            padding: 14px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .animation-option:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(102, 126, 234, 0.5);
+        }
+
+        .animation-option.active {
+            background: rgba(102, 126, 234, 0.2);
+            border-color: #667eea;
+        }
+
+        .animation-option-title {
+            font-weight: 600;
+            font-size: 13px;
+            color: #e0e6ed;
+            margin-bottom: 4px;
+        }
+
+        .animation-option.active .animation-option-title {
+            color: #64ffda;
+        }
+
+        .animation-option-desc {
+            font-size: 11px;
+            color: #8892b0;
+            line-height: 1.4;
+        }
+
+        /* Status */
+        #status {
+            font-size: 12px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 6px;
+            margin-top: 12px;
+            text-align: center;
+        }
+
+        .loading {
+            color: #64ffda;
+        }
+
+        .error {
+            color: #ff6b6b;
+        }
+
+        .success {
+            color: #51cf66;
+        }
+
+        /* Time Slider */
+        #timeSlider {
+            position: absolute;
+            bottom: 60px;
+            left: 360px;
+            right: 20px;
+            height: 40px;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #sidePanel.collapsed ~ #timeSlider {
+            left: 20px;
+        }
+
+        .slider-container {
+            flex: 1;
+            position: relative;
+            height: 40px;
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        #timeRange {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            -webkit-appearance: none;
+            appearance: none;
+            background: transparent;
+            outline: none;
+            cursor: pointer;
+            z-index: 2;
+        }
+
+        #timeRange::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 3px;
+            height: 40px;
+            background: #667eea;
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.8), 0 0 20px rgba(102, 126, 234, 0.4);
+            border-radius: 2px;
+        }
+
+        #timeRange::-webkit-slider-thumb:hover {
+            background: #764ba2;
+            box-shadow: 0 0 15px rgba(118, 75, 162, 0.9), 0 0 30px rgba(118, 75, 162, 0.5);
+        }
+
+        #timeRange::-moz-range-thumb {
+            width: 3px;
+            height: 40px;
+            background: #667eea;
+            cursor: pointer;
+            border: none;
+            box-shadow: 0 0 10px rgba(102, 126, 234, 0.8), 0 0 20px rgba(102, 126, 234, 0.4);
+            border-radius: 2px;
+        }
+
+        #timeRange::-moz-range-thumb:hover {
+            background: #764ba2;
+            box-shadow: 0 0 15px rgba(118, 75, 162, 0.9), 0 0 30px rgba(118, 75, 162, 0.5);
+        }
+
+        .slider-day-labels {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 100%;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 10px;
+            pointer-events: none;
+            z-index: 1;
+        }
+
+        .day-label {
+            font-size: 14px;
+            font-weight: 600;
+            color: white;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+            letter-spacing: 0.5px;
+        }
+
+        /* Legend */
+        #legend {
+            position: absolute;
+            bottom: 20px;
+            left: 360px;
+            right: 20px;
+            height: 30px;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            transition: left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        #sidePanel.collapsed ~ #legend {
+            left: 20px;
+        }
+
+        .gradient-bar {
+            flex: 1;
+            height: 30px;
+            background: linear-gradient(to right, 
+                #0000ff 0%, 
+                #0080ff 25%, 
+                #00ff00 40%, 
+                #80ff00 55%, 
+                #ffff00 70%, 
+                #ff8000 85%, 
+                #ff0000 100%);
+            position: relative;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+        }
+
+        .gradient-labels {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px;
+            font-size: 12px;
+            font-weight: 600;
+            color: white;
+            text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+            pointer-events: none;
+        }
+
+        .legend-label {
+            position: absolute;
+            right: -50px;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 13px;
+            font-weight: 600;
+            color: #e0e6ed;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Scrollbar Styling */
+        #sidePanel::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        #sidePanel::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        #sidePanel::-webkit-scrollbar-thumb {
+            background: rgba(102, 126, 234, 0.3);
+            border-radius: 4px;
+        }
+
+        #sidePanel::-webkit-scrollbar-thumb:hover {
+            background: rgba(102, 126, 234, 0.5);
+        }
+    </style>
 </head>
 <body>
     <div id="map"></div>
-
-    <div id="controls">
-        <div id="sheet-handle" aria-label="Toggle controls panel">
-            <div class="handle-bar"></div>
-        </div>
-        <div id="controls-content">
-            <h3>Tidal Currents</h3>
-            <div id="currentTime">Current time: --</div>
-            <div class="time-controls">
-                <button class="time-btn" id="prevBtn">-1h</button>
-                <input type="datetime-local" id="timeInput" />
-                <button class="time-btn" id="nextBtn">+1h</button>
+    
+    <!-- Side Panel -->
+    <div id="sidePanel">
+        <div class="panel-content">
+            <div class="panel-header">
+                <h1>Actual Currents</h1>
+                <p>Real-time tidal flow visualization</p>
             </div>
-            <button id="nowBtn">Jump to Now</button>
-            <button id="animateBtn" style="background: #9821f3;">Start Animation</button>
+
+            <!-- Time Controls Section -->
+            <div class="section">
+                <div class="section-title">Time Control</div>
+                <div id="currentTime">Current time: --</div>
+                <div class="time-controls">
+                    <button class="time-btn" id="prevBtn">-1h</button>
+                    <input type="datetime-local" id="timeInput" />
+                    <button class="time-btn" id="nextBtn">+1h</button>
+                </div>
+                <button id="nowBtn">Jump to Now</button>
+            </div>
+
+            <!-- Basemap Selection Section -->
+            <div class="section">
+                <div class="section-title">Basemap Style</div>
+                <div class="basemap-grid">
+                    <div class="basemap-option" data-style="mapbox://styles/mapbox/dark-v11">
+                        Dark
+                    </div>
+                    <div class="basemap-option" data-style="mapbox://styles/mapbox/satellite-v9">
+                        Satellite
+                    </div>
+                    <div class="basemap-option active" data-style="mapbox://styles/mapbox/navigation-night-v1">
+                        Navigation
+                    </div>
+                    <div class="basemap-option" data-style="mapbox://styles/mapbox/light-v11">
+                        Light
+                    </div>
+                </div>
+            </div>
+
+            <!-- Animation Type Section -->
+            <div class="section">
+                <div class="section-title">Visualization Mode</div>
+                <div class="animation-options">
+                    <div class="animation-option active" data-mode="colored-particles">
+                        <div class="animation-option-title">Colored Particles</div>
+                        <div class="animation-option-desc">Particles change color based on current velocity</div>
+                    </div>
+                    <div class="animation-option" data-mode="white-particles">
+                        <div class="animation-option-title">White Particles</div>
+                        <div class="animation-option-desc">Simple white particle trails</div>
+                    </div>
+                    <div class="animation-option" data-mode="vector-arrows">
+                        <div class="animation-option-title">Vector Arrows</div>
+                        <div class="animation-option-desc">Static arrows showing current direction and magnitude</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Animation Control -->
+            <div class="section">
+                <button id="animateBtn" style="background: linear-gradient(135deg, #51cf66 0%, #37b24d 100%);">
+                    Start Animation
+                </button>
+                <div id="status">Ready</div>
+            </div>
         </div>
-        <div id="status">Ready</div>
     </div>
 
+    <!-- Toggle Button -->
+    <button id="togglePanel" aria-label="Toggle side panel">
+        <svg viewBox="0 0 24 24">
+            <path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/>
+        </svg>
+    </button>
+
+    <!-- Time Slider -->
+    <div id="timeSlider">
+        <div class="slider-container">
+            <input type="range" id="timeRange" min="0" max="336" value="0" step="1">
+            <div class="slider-day-labels" id="dayLabels">
+                <!-- Day labels will be generated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Legend -->
     <div id="legend">
-        <h4>Current Speed</h4>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #0000ff;"></div>
-            <span>0.0 - 0.3 m/s (Calm)</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #00ff00;"></div>
-            <span>0.3 - 0.6 m/s (Moderate)</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #ffff00;"></div>
-            <span>0.6 - 1.0 m/s (Strong)</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-color" style="background: #ff0000;"></div>
-            <span>>1.0 m/s (Very Strong)</span>
+        <div class="gradient-bar">
+            <div class="gradient-labels">
+                <span>0</span>
+                <span>0.58</span>
+                <span>1.17</span>
+                <span>1.94</span>
+                <span>2.33</span>
+            </div>
+            <div class="legend-label">knots</div>
         </div>
     </div>
 
-    <!-- Mobile node info drawer (replaces popups on mobile) -->
-    <div id="node-drawer">
-        <div class="handle-bar"></div>
-        <div id="drawer-content"></div>
-    </div>
-
-    <script src="js/device.js"></script>
-    <script src="js/config.js"></script>
     <script src="js/particles.js"></script>
     <script>
         // Mapbox access token
         mapboxgl.accessToken = 'pk.eyJ1IjoibHVrYWNhdGlwb3ZpYyIsImEiOiJjbWtoZHZxa2wwamR6M2Nvb3Y5cGJubTQwIn0.iuVLjdpQvRkHoxPV9IsUvg';
 
-        // Initialize map
+        // Initialize map centered on Western North Atlantic
         const map = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/streets-v12',
-            center: [-70, 41],
-            zoom: 7,
+            style: 'mapbox://styles/mapbox/navigation-night-v1',
+            center: [-70.685, 41.518382],
+            zoom: 13,
             pitch: 0
         });
 
-        // API endpoint (configurable for Capacitor)
-        const API_BASE = Config.API_BASE;
+        // API endpoint
+        const API_BASE = 'http://localhost:8000/api/v1';
 
         // Data storage
         let meshData = null;
         let particleSystem = null;
         let currentTime = new Date();
+        let baseTime = new Date(); // Reference time for the slider (start of 2-week range)
+        let currentAnimationMode = 'colored-particles';
+
+        // Initialize base time to current time (slider starts at 0 = now)
+        baseTime = new Date(currentTime);
 
         // Auto-load configuration
         const MIN_ZOOM_FOR_DATA = 8;
-        const DEBOUNCE_MS = Device.isMobile() ? 200 : 100;
         let loadDebounceTimer = null;
         let currentAbortController = null;
 
-        // ─── Bottom sheet toggle ──────────────────────────────────────────
-        const sheetHandle = document.getElementById('sheet-handle');
-        const controlsEl = document.getElementById('controls');
-
-        sheetHandle.addEventListener('click', () => {
-            controlsEl.classList.toggle('collapsed');
-        });
-
-        // ─── Legend collapse on mobile ────────────────────────────────────
-        const legendEl = document.getElementById('legend');
-        const legendHeader = legendEl.querySelector('h4');
-
-        legendHeader.addEventListener('click', () => {
-            if (Device.isMobile()) {
-                legendEl.classList.toggle('expanded');
+        // Generate day of week labels for the slider
+        function generateDayLabels() {
+            const dayLabelsContainer = document.getElementById('dayLabels');
+            const daysOfWeek = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+            
+            // Generate labels for 14 days (2 weeks)
+            for (let i = 0; i <= 14; i++) {
+                const date = new Date(baseTime.getTime() + i * 24 * 60 * 60 * 1000);
+                const dayIndex = date.getDay();
+                const label = document.createElement('span');
+                label.className = 'day-label';
+                label.textContent = daysOfWeek[dayIndex];
+                dayLabelsContainer.appendChild(label);
             }
-        });
+        }
 
-        // ─── Node drawer dismiss ──────────────────────────────────────────
-        const nodeDrawer = document.getElementById('node-drawer');
+        // Initialize day labels on load
+        generateDayLabels();
 
-        nodeDrawer.addEventListener('click', (e) => {
-            // Dismiss when tapping the handle bar area
-            if (e.target === nodeDrawer || e.target.classList.contains('handle-bar')) {
-                nodeDrawer.classList.remove('visible');
-            }
-        });
-
-        // Dismiss drawer on map click
-        map.on('click', () => {
-            nodeDrawer.classList.remove('visible');
-        });
-
-        // ─── Status helpers ───────────────────────────────────────────────
+        // Status helpers
         const status = document.getElementById('status');
         function setStatus(msg, type = '') {
             status.textContent = msg;
             status.className = type;
         }
 
-        // ─── Time helpers ─────────────────────────────────────────────────
+        // Time helpers
         function formatDateTimeLocal(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -153,9 +654,10 @@
             document.getElementById('timeInput').value = formatDateTimeLocal(currentTime);
         }
 
+        // Initialize time
         updateTimeDisplay();
 
-        // ─── Data loading ─────────────────────────────────────────────────
+        // Schedule a debounced data load
         function scheduleLoad() {
             clearTimeout(loadDebounceTimer);
 
@@ -169,24 +671,22 @@
             }
 
             setStatus('Loading...', 'loading');
-            loadDebounceTimer = setTimeout(loadMeshData, DEBOUNCE_MS);
+            loadDebounceTimer = setTimeout(loadMeshData, 100);
         }
 
+        // Clear mesh data from map
         function clearMesh() {
-            const source = map.getSource('mesh-nodes');
-            if (source) {
-                source.setData({ type: 'FeatureCollection', features: [] });
-            }
             if (particleSystem) {
                 particleSystem.destroy();
                 particleSystem = null;
                 const btn = document.getElementById('animateBtn');
                 btn.textContent = 'Start Animation';
-                btn.style.background = '#2196F3';
+                btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
             }
             meshData = null;
         }
 
+        // Load mesh data from API
         async function loadMeshData() {
             if (currentAbortController) {
                 currentAbortController.abort();
@@ -201,13 +701,9 @@
 
             try {
                 const timeStr = currentTime.toISOString();
-                let url = `${API_BASE}/mesh?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&time=${timeStr}`;
+                const url = `${API_BASE}/mesh?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&time=${timeStr}`;
 
-                // Skip depth data on mobile (only used for click popups)
-                if (Device.isMobile()) {
-                    url += '&include_depth=false';
-                }
-
+                console.log('Fetching:', url);
                 const response = await fetch(url, { signal: currentAbortController.signal });
 
                 if (!response.ok) {
@@ -234,95 +730,31 @@
             }
         }
 
-        // ─── Node click handler ───────────────────────────────────────────
-        function handleNodeClick(e) {
-            const props = e.features[0].properties;
-            const coords = e.features[0].geometry.coordinates.slice();
-
-            const direction = Math.atan2(props.v_vel, props.u_vel) * 180 / Math.PI;
-            let bearing = (direction + 90) % 360;
-            if (bearing < 0) bearing += 360;
-            const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-            const dirIndex = Math.round(bearing / 45) % 8;
-            const dirText = directions[dirIndex];
-
-            const infoHTML = `
-                <strong>Tidal Current</strong><br/>
-                <strong>Speed:</strong> ${props.magnitude.toFixed(3)} m/s<br/>
-                <strong>Direction:</strong> ${bearing.toFixed(0)}&deg; (${dirText})<br/>
-                <strong>U (East):</strong> ${props.u_vel.toFixed(3)} m/s<br/>
-                <strong>V (North):</strong> ${props.v_vel.toFixed(3)} m/s<br/>
-                <strong>Depth:</strong> ${(props.depth || 0).toFixed(1)} m
-            `;
-
-            if (Device.isMobile()) {
-                document.getElementById('drawer-content').innerHTML = infoHTML;
-                nodeDrawer.classList.add('visible');
-            } else {
-                new mapboxgl.Popup()
-                    .setLngLat(coords)
-                    .setHTML(infoHTML)
-                    .addTo(map);
-            }
-        }
-
-        // ─── Mesh visualization ───────────────────────────────────────────
+        // Visualize mesh
         function visualizeMesh() {
             if (!meshData) return;
 
             const { lat, lon, u_velocity, v_velocity, depth } = meshData.nodes;
             const n = lat.length;
+            
+            // Create point features for reference only
             const features = new Array(n);
+            
             for (let i = 0; i < n; i++) {
                 const u = u_velocity[i];
                 const v = v_velocity[i];
+                const magnitude = Math.sqrt(u * u + v * v);
+                
                 features[i] = {
                     type: 'Feature',
                     geometry: { type: 'Point', coordinates: [lon[i], lat[i]] },
                     properties: {
-                        magnitude: Math.sqrt(u * u + v * v),
+                        magnitude: magnitude,
                         u_vel: u,
                         v_vel: v,
                         depth: depth ? depth[i] : 0
                     }
                 };
-            }
-
-            const geojsonData = { type: 'FeatureCollection', features: features };
-
-            const existingSource = map.getSource('mesh-nodes');
-            if (existingSource) {
-                existingSource.setData(geojsonData);
-            } else {
-                map.addSource('mesh-nodes', { type: 'geojson', data: geojsonData });
-
-                map.addLayer({
-                    id: 'mesh-nodes',
-                    type: 'circle',
-                    source: 'mesh-nodes',
-                    paint: {
-                        'circle-radius': 3,
-                        'circle-color': [
-                            'interpolate',
-                            ['linear'],
-                            ['get', 'magnitude'],
-                            0.0, '#0000ff',
-                            0.3, '#00ff00',
-                            0.6, '#ffff00',
-                            1.0, '#ff0000',
-                            2.0, '#ff0000'
-                        ],
-                        'circle-opacity': 0
-                    }
-                }, 'waterway-label');
-
-                map.on('click', 'mesh-nodes', handleNodeClick);
-                map.on('mouseenter', 'mesh-nodes', () => {
-                    map.getCanvas().style.cursor = 'pointer';
-                });
-                map.on('mouseleave', 'mesh-nodes', () => {
-                    map.getCanvas().style.cursor = '';
-                });
             }
 
             const magnitudes = features.map(f => f.properties.magnitude);
@@ -335,39 +767,52 @@
                 'success'
             );
 
-            // Auto-start or update particle animation with adaptive settings
             if (!particleSystem) {
-                const isMobile = Device.isMobile();
-                const isLowEnd = Device.hasLowMemory() || Device.prefersReducedMotion();
-
-                particleSystem = new ParticleSystem(map, meshData, {
-                    numParticles: isLowEnd ? 800 : (isMobile ? 1200 : 2500),
+                const particleOptions = {
+                    numParticles: 5000,
                     speedScale: 2,
-                    maxAge: isMobile ? 60 : 80,
-                    trailFade: isMobile ? 0.92 : 0.95,
-                    lineWidth: isMobile ? 1.0 : 1.5,
-                    frameSkip: isLowEnd ? 2 : 1
-                });
+                    maxAge: 150,
+                    trailFade: 0.95,
+                    lineWidth: 1.5,
+                    colorMode: currentAnimationMode
+                };
 
-                particleSystem.start();
-                const btn = document.getElementById('animateBtn');
-                btn.textContent = 'Stop Animation';
-                btn.style.background = '#4CAF50';
+                particleSystem = new ParticleSystem(map, meshData, particleOptions);
+                
+                // Only start animation for particle modes
+                if (currentAnimationMode !== 'vector-arrows') {
+                    particleSystem.start();
+                    const btn = document.getElementById('animateBtn');
+                    btn.textContent = 'Stop Animation';
+                    btn.style.background = 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)';
+                } else {
+                    // For vector arrows, just render once
+                    particleSystem.renderVectorField();
+                }
             } else {
                 particleSystem.updateMeshData(meshData);
             }
         }
 
-        // ─── Time controls ────────────────────────────────────────────────
+        // Time control functions
         function adjustTime(hours) {
             currentTime = new Date(currentTime.getTime() + hours * 60 * 60 * 1000);
             updateTimeDisplay();
+            updateSliderFromTime();
             scheduleLoad();
         }
 
         function jumpToNow() {
             currentTime = new Date();
+            baseTime = new Date();
             updateTimeDisplay();
+            document.getElementById('timeRange').value = 0; // Start at now
+            
+            // Regenerate day labels from new base time
+            const dayLabelsContainer = document.getElementById('dayLabels');
+            dayLabelsContainer.innerHTML = '';
+            generateDayLabels();
+            
             scheduleLoad();
         }
 
@@ -376,75 +821,109 @@
             if (!isNaN(newTime.getTime())) {
                 currentTime = newTime;
                 updateTimeDisplay();
+                updateSliderFromTime();
                 scheduleLoad();
             }
         }
 
+        function updateSliderFromTime() {
+            const diffMs = currentTime - baseTime;
+            const diffHours = Math.round(diffMs / (1000 * 60 * 60));
+            document.getElementById('timeRange').value = Math.max(0, Math.min(336, diffHours));
+        }
+
+        // Time slider handler
+        document.getElementById('timeRange').addEventListener('input', function(e) {
+            const hoursFromBase = parseInt(e.target.value);
+            currentTime = new Date(baseTime.getTime() + hoursFromBase * 60 * 60 * 1000);
+            updateTimeDisplay();
+            scheduleLoad();
+        });
+
+        // Toggle particle animation
         function toggleAnimation() {
             if (!particleSystem) return;
+            
+            // Vector arrows mode doesn't animate
+            if (currentAnimationMode === 'vector-arrows') {
+                return;
+            }
+            
             const running = particleSystem.toggle();
             const btn = document.getElementById('animateBtn');
             btn.textContent = running ? 'Stop Animation' : 'Start Animation';
-            btn.style.background = running ? '#4CAF50' : '#2196F3';
+            btn.style.background = running 
+                ? 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)' 
+                : 'linear-gradient(135deg, #51cf66 0%, #37b24d 100%)';
         }
 
-        // ─── Event listeners ──────────────────────────────────────────────
+        // Panel toggle
+        document.getElementById('togglePanel').addEventListener('click', () => {
+            document.getElementById('sidePanel').classList.toggle('collapsed');
+        });
+
+        // Time controls
         document.getElementById('prevBtn').addEventListener('click', () => adjustTime(-1));
         document.getElementById('nextBtn').addEventListener('click', () => adjustTime(1));
         document.getElementById('nowBtn').addEventListener('click', jumpToNow);
         document.getElementById('timeInput').addEventListener('change', handleTimeInputChange);
         document.getElementById('animateBtn').addEventListener('click', toggleAnimation);
 
+        // Basemap selection
+        document.querySelectorAll('.basemap-option').forEach(option => {
+            option.addEventListener('click', function() {
+                document.querySelectorAll('.basemap-option').forEach(o => o.classList.remove('active'));
+                this.classList.add('active');
+                map.setStyle(this.dataset.style);
+            });
+        });
+
+        // Animation mode selection
+        document.querySelectorAll('.animation-option').forEach(option => {
+            option.addEventListener('click', function() {
+                document.querySelectorAll('.animation-option').forEach(o => o.classList.remove('active'));
+                this.classList.add('active');
+                const newMode = this.dataset.mode;
+                const oldMode = currentAnimationMode;
+                currentAnimationMode = newMode;
+                
+                // Update particle system
+                if (particleSystem) {
+                    particleSystem.setColorMode(currentAnimationMode);
+                    
+                    // Handle transition between modes
+                    if (newMode === 'vector-arrows') {
+                        // Stop animation and render static vectors
+                        particleSystem.stop();
+                        particleSystem.renderVectorField();
+                        
+                        const btn = document.getElementById('animateBtn');
+                        btn.textContent = 'Vector Mode';
+                        btn.style.background = 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)';
+                        btn.disabled = true;
+                    } else if (oldMode === 'vector-arrows') {
+                        // Start animation when switching from vectors
+                        particleSystem.start();
+                        
+                        const btn = document.getElementById('animateBtn');
+                        btn.textContent = 'Stop Animation';
+                        btn.style.background = 'linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%)';
+                        btn.disabled = false;
+                    }
+                }
+            });
+        });
+
+        // Auto-load on pan/zoom
         map.on('moveend', scheduleLoad);
 
+        // Auto-load on initial map load
         map.on('load', () => {
-            map.addSource('mapbox-bathymetry', {
-                type: 'vector',
-                url: 'mapbox://mapbox.terrain-rgb'
-            });
-
-            map.addLayer({
-                id: 'bathymetry-layer',
-                type: 'fill',
-                source: 'mapbox-bathymetry',
-                'source-layer': 'contour',
-                paint: {
-                    'fill-color': [
-                        'interpolate',
-                        ['linear'],
-                        ['get', 'depth'],
-                        0, 'rgba(49, 119, 155, 0.7)',
-                        100, 'rgba(41, 101, 132, 0.7)',
-                        500, 'rgba(33, 83, 109, 0.7)',
-                        1000, 'rgba(25, 65, 86, 0.7)',
-                        2000, 'rgba(17, 47, 63, 0.7)',
-                        5000, 'rgba(9, 29, 40, 0.7)'
-                    ],
-                    'fill-opacity': 0.6
-                },
-                filter: ['all', ['>=', 'depth', 0]]
-            }, 'water');
-
-            map.addLayer({
-                id: 'bathymetry-contours',
-                type: 'line',
-                source: 'mapbox-bathymetry',
-                'source-layer': 'contour',
-                paint: {
-                    'line-color': 'rgba(32, 74, 135, 0.4)',
-                    'line-width': 0.5,
-                    'line-opacity': 0.4
-                },
-                filter: ['all', ['>=', 'depth', 0]]
-            }, 'bathymetry-layer');
-
             map.addSource('gebco-bathymetry', {
                 type: 'raster',
-                tiles: [
-                    'https://tiles.gebco.net/tiles/gebco_2023_sub_ice/{z}/{x}/{y}.png'
-                ],
+                tiles: ['https://tiles.gebco.net/tiles/gebco_2023/{z}/{x}/{y}.png'],
                 tileSize: 256,
-                attribution: '&copy; GEBCO'
+                attribution: '© GEBCO'
             });
 
             map.addLayer({
@@ -452,31 +931,14 @@
                 type: 'raster',
                 source: 'gebco-bathymetry',
                 paint: {
-                    'raster-opacity': 0.4,
-                    'raster-color-mix': [0, 0, 0, 0],
-                    'raster-color': [
-                        'interpolate',
-                        ['linear'],
-                        ['raster-value'],
-                        0, 'rgba(49, 119, 155, 0)',
-                        100, 'rgba(41, 101, 132, 0.5)',
-                        1000, 'rgba(33, 83, 109, 0.7)',
-                        3000, 'rgba(25, 65, 86, 0.8)',
-                        5000, 'rgba(17, 47, 63, 0.9)',
-                        8000, 'rgba(9, 29, 40, 1)'
-                    ]
+                    'raster-opacity': 0.6
                 }
-            }, 'bathymetry-contours');
+            });
 
-            setTimeout(scheduleLoad, 500);
+            scheduleLoad();
         });
 
-        // Register service worker for PWA
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js')
-                .then(reg => console.log('SW registered:', reg.scope))
-                .catch(err => console.warn('SW registration failed:', err));
-        }
+        console.log('Actual Currents Visualization initialized');
     </script>
 </body>
 </html>
