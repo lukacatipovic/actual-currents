@@ -1,0 +1,302 @@
+/* ─── Base Styles ──────────────────────────────────────────────────────────── */
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-text-size-adjust: 100%;
+}
+
+#map {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 100%;
+}
+
+/* ─── Controls Panel ───────────────────────────────────────────────────────── */
+
+#controls {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 1;
+    max-width: 320px;
+}
+
+#sheet-handle {
+    display: none;
+    text-align: center;
+    padding: 6px 0 2px;
+    cursor: pointer;
+}
+
+.handle-bar {
+    width: 36px;
+    height: 4px;
+    background: #ccc;
+    border-radius: 2px;
+    margin: 0 auto;
+}
+
+#status {
+    font-size: 12px;
+    color: #666;
+    margin-top: 10px;
+}
+
+h3 {
+    margin: 0 0 10px 0;
+    font-size: 16px;
+}
+
+#currentTime {
+    font-size: 11px;
+    color: #666;
+    margin: 5px 0;
+}
+
+/* ─── Time Controls ────────────────────────────────────────────────────────── */
+
+.time-controls {
+    margin: 10px 0;
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.time-controls input {
+    flex: 1;
+    padding: 5px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 12px;
+}
+
+.time-btn {
+    width: 35px;
+    padding: 5px;
+    margin: 0;
+}
+
+/* ─── Buttons ──────────────────────────────────────────────────────────────── */
+
+button {
+    background: #2196F3;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-top: 10px;
+    width: 100%;
+}
+
+button:hover {
+    background: #1976D2;
+}
+
+button:disabled {
+    background: #ccc;
+    cursor: not-allowed;
+}
+
+/* ─── Status Classes ───────────────────────────────────────────────────────── */
+
+.loading { color: #2196F3; }
+.error { color: #f44336; }
+.success { color: #4CAF50; }
+
+/* ─── Legend ────────────────────────────────────────────────────────────────── */
+
+#legend {
+    position: absolute;
+    bottom: 30px;
+    left: 10px;
+    background: white;
+    padding: 15px;
+    border-radius: 8px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    z-index: 1;
+}
+
+#legend h4 {
+    margin: 0 0 10px 0;
+    font-size: 14px;
+}
+
+.legend-item {
+    display: flex;
+    align-items: center;
+    margin: 5px 0;
+    font-size: 12px;
+}
+
+.legend-color {
+    width: 30px;
+    height: 15px;
+    margin-right: 8px;
+    border-radius: 2px;
+}
+
+/* ─── Node Info Drawer (mobile popup replacement) ──────────────────────────── */
+
+#node-drawer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: white;
+    border-radius: 16px 16px 0 0;
+    box-shadow: 0 -4px 20px rgba(0,0,0,0.2);
+    z-index: 200;
+    padding: 8px 16px 16px;
+    transform: translateY(100%);
+    transition: transform 0.3s ease;
+}
+
+#node-drawer.visible {
+    transform: translateY(0);
+}
+
+#node-drawer .handle-bar {
+    width: 36px;
+    height: 4px;
+    background: #ccc;
+    border-radius: 2px;
+    margin: 0 auto 12px;
+}
+
+#drawer-content {
+    font-size: 14px;
+    line-height: 1.6;
+}
+
+#drawer-content strong {
+    color: #333;
+}
+
+/* ─── Mobile Responsive (max-width: 768px) ─────────────────────────────────── */
+
+@media (max-width: 768px) {
+    /* Bottom sheet controls */
+    #controls {
+        position: fixed;
+        top: auto;
+        right: 0;
+        bottom: 0;
+        left: 0;
+        max-width: 100%;
+        border-radius: 16px 16px 0 0;
+        box-shadow: 0 -4px 20px rgba(0,0,0,0.15);
+        padding: 0 16px 12px;
+        padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+        z-index: 100;
+        transition: transform 0.3s ease;
+    }
+
+    #controls.collapsed {
+        transform: translateY(calc(100% - 70px));
+    }
+
+    #sheet-handle {
+        display: block;
+    }
+
+    #controls h3 {
+        font-size: 15px;
+        margin-bottom: 8px;
+    }
+
+    /* Touch-friendly button sizing (Apple HIG: 44px minimum) */
+    button {
+        min-height: 44px;
+        font-size: 14px;
+        padding: 10px 16px;
+        border-radius: 8px;
+    }
+
+    .time-btn {
+        width: 44px;
+        min-height: 44px;
+        font-size: 14px;
+    }
+
+    .time-controls input {
+        min-height: 44px;
+        font-size: 16px; /* prevents iOS zoom on focus */
+        border-radius: 8px;
+    }
+
+    .time-controls {
+        gap: 8px;
+    }
+
+    /* Compact legend - top left, collapsed by default */
+    #legend {
+        bottom: auto;
+        top: 10px;
+        left: 10px;
+        padding: 8px 12px;
+        font-size: 11px;
+        border-radius: 8px;
+    }
+
+    #legend h4 {
+        margin: 0;
+        font-size: 12px;
+        cursor: pointer;
+    }
+
+    #legend h4::after {
+        content: ' \25BC'; /* down arrow */
+        font-size: 9px;
+    }
+
+    #legend.expanded h4::after {
+        content: ' \25B2'; /* up arrow */
+    }
+
+    #legend .legend-item {
+        display: none;
+        margin: 4px 0;
+    }
+
+    #legend.expanded .legend-item {
+        display: flex;
+    }
+
+    #legend.expanded h4 {
+        margin-bottom: 8px;
+    }
+
+    .legend-color {
+        width: 20px;
+        height: 10px;
+    }
+
+    /* Node drawer safe area */
+    #node-drawer {
+        padding-bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    }
+}
+
+/* ─── Small screen tweaks (max-width: 380px) ───────────────────────────────── */
+
+@media (max-width: 380px) {
+    #controls {
+        padding: 0 12px 10px;
+    }
+
+    #controls h3 {
+        font-size: 14px;
+    }
+
+    #currentTime {
+        font-size: 10px;
+    }
+}

@@ -2,132 +2,38 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#2196F3">
     <title>Actual Currents - Tidal Flow Visualization</title>
     <script src='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.js'></script>
     <link href='https://api.mapbox.com/mapbox-gl-js/v3.0.1/mapbox-gl.css' rel='stylesheet' />
-    <style>
-        body {
-            margin: 0;
-            padding: 0;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-        }
-        #map {
-            position: absolute;
-            top: 0;
-            bottom: 0;
-            width: 100%;
-        }
-        #controls {
-            position: absolute;
-            top: 10px;
-            right: 10px;
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            z-index: 1;
-            max-width: 320px;
-        }
-        #status {
-            font-size: 12px;
-            color: #666;
-            margin-top: 10px;
-        }
-        #legend {
-            position: absolute;
-            bottom: 30px;
-            left: 10px;
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            z-index: 1;
-        }
-        #legend h4 {
-            margin: 0 0 10px 0;
-            font-size: 14px;
-        }
-        .legend-item {
-            display: flex;
-            align-items: center;
-            margin: 5px 0;
-            font-size: 12px;
-        }
-        .legend-color {
-            width: 30px;
-            height: 15px;
-            margin-right: 8px;
-            border-radius: 2px;
-        }
-        .time-controls {
-            margin: 10px 0;
-            display: flex;
-            gap: 5px;
-            align-items: center;
-        }
-        .time-controls input {
-            flex: 1;
-            padding: 5px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            font-size: 12px;
-        }
-        .time-btn {
-            width: 35px;
-            padding: 5px;
-            margin: 0;
-        }
-        #currentTime {
-            font-size: 11px;
-            color: #666;
-            margin: 5px 0;
-        }
-        .loading {
-            color: #2196F3;
-        }
-        .error {
-            color: #f44336;
-        }
-        .success {
-            color: #4CAF50;
-        }
-        button {
-            background: #2196F3;
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 4px;
-            cursor: pointer;
-            margin-top: 10px;
-            width: 100%;
-        }
-        button:hover {
-            background: #1976D2;
-        }
-        button:disabled {
-            background: #ccc;
-            cursor: not-allowed;
-        }
-        h3 {
-            margin: 0 0 10px 0;
-            font-size: 16px;
-        }
-    </style>
+    <link rel="stylesheet" href="css/styles.css" />
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icons/icon-192.png">
 </head>
 <body>
     <div id="map"></div>
+
     <div id="controls">
-        <h3>🌊 Tidal Currents</h3>
-        <div id="currentTime">Current time: --</div>
-        <div class="time-controls">
-            <button class="time-btn" id="prevBtn">-1h</button>
-            <input type="datetime-local" id="timeInput" />
-            <button class="time-btn" id="nextBtn">+1h</button>
+        <div id="sheet-handle" aria-label="Toggle controls panel">
+            <div class="handle-bar"></div>
         </div>
-        <button id="nowBtn">Jump to Now</button>
+        <div id="controls-content">
+            <h3>Tidal Currents</h3>
+            <div id="currentTime">Current time: --</div>
+            <div class="time-controls">
+                <button class="time-btn" id="prevBtn">-1h</button>
+                <input type="datetime-local" id="timeInput" />
+                <button class="time-btn" id="nextBtn">+1h</button>
+            </div>
+            <button id="nowBtn">Jump to Now</button>
+            <button id="animateBtn" style="background: #9821f3;">Start Animation</button>
+        </div>
         <div id="status">Ready</div>
     </div>
+
     <div id="legend">
         <h4>Current Speed</h4>
         <div class="legend-item">
@@ -148,22 +54,30 @@
         </div>
     </div>
 
+    <!-- Mobile node info drawer (replaces popups on mobile) -->
+    <div id="node-drawer">
+        <div class="handle-bar"></div>
+        <div id="drawer-content"></div>
+    </div>
+
+    <script src="js/device.js"></script>
+    <script src="js/config.js"></script>
     <script src="js/particles.js"></script>
     <script>
         // Mapbox access token
         mapboxgl.accessToken = 'pk.eyJ1IjoibHVrYWNhdGlwb3ZpYyIsImEiOiJjbWtoZHZxa2wwamR6M2Nvb3Y5cGJubTQwIn0.iuVLjdpQvRkHoxPV9IsUvg';
 
-        // Initialize map centered on Western North Atlantic
+        // Initialize map
         const map = new mapboxgl.Map({
             container: 'map',
-            style: 'mapbox://styles/mapbox/dark-v11',
-            center: [-75, 35], // Mid-Atlantic
-            zoom: 6,
+            style: 'mapbox://styles/mapbox/streets-v12',
+            center: [-70, 41],
+            zoom: 7,
             pitch: 0
         });
 
-        // API endpoint
-        const API_BASE = 'http://localhost:8000/api/v1';
+        // API endpoint (configurable for Capacitor)
+        const API_BASE = Config.API_BASE;
 
         // Data storage
         let meshData = null;
@@ -172,17 +86,51 @@
 
         // Auto-load configuration
         const MIN_ZOOM_FOR_DATA = 8;
+        const DEBOUNCE_MS = Device.isMobile() ? 200 : 100;
         let loadDebounceTimer = null;
         let currentAbortController = null;
 
-        // Status helpers
+        // ─── Bottom sheet toggle ──────────────────────────────────────────
+        const sheetHandle = document.getElementById('sheet-handle');
+        const controlsEl = document.getElementById('controls');
+
+        sheetHandle.addEventListener('click', () => {
+            controlsEl.classList.toggle('collapsed');
+        });
+
+        // ─── Legend collapse on mobile ────────────────────────────────────
+        const legendEl = document.getElementById('legend');
+        const legendHeader = legendEl.querySelector('h4');
+
+        legendHeader.addEventListener('click', () => {
+            if (Device.isMobile()) {
+                legendEl.classList.toggle('expanded');
+            }
+        });
+
+        // ─── Node drawer dismiss ──────────────────────────────────────────
+        const nodeDrawer = document.getElementById('node-drawer');
+
+        nodeDrawer.addEventListener('click', (e) => {
+            // Dismiss when tapping the handle bar area
+            if (e.target === nodeDrawer || e.target.classList.contains('handle-bar')) {
+                nodeDrawer.classList.remove('visible');
+            }
+        });
+
+        // Dismiss drawer on map click
+        map.on('click', () => {
+            nodeDrawer.classList.remove('visible');
+        });
+
+        // ─── Status helpers ───────────────────────────────────────────────
         const status = document.getElementById('status');
         function setStatus(msg, type = '') {
             status.textContent = msg;
             status.className = type;
         }
 
-        // Time helpers
+        // ─── Time helpers ─────────────────────────────────────────────────
         function formatDateTimeLocal(date) {
             const year = date.getFullYear();
             const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -205,15 +153,13 @@
             document.getElementById('timeInput').value = formatDateTimeLocal(currentTime);
         }
 
-        // Initialize time
         updateTimeDisplay();
 
-        // Schedule a debounced data load (called on pan/zoom/time change)
+        // ─── Data loading ─────────────────────────────────────────────────
         function scheduleLoad() {
             clearTimeout(loadDebounceTimer);
 
             if (map.getZoom() < MIN_ZOOM_FOR_DATA) {
-                // Cancel in-flight request if zoomed out
                 if (currentAbortController) {
                     currentAbortController.abort();
                 }
@@ -223,10 +169,9 @@
             }
 
             setStatus('Loading...', 'loading');
-            loadDebounceTimer = setTimeout(loadMeshData, 100);
+            loadDebounceTimer = setTimeout(loadMeshData, DEBOUNCE_MS);
         }
 
-        // Clear mesh data from map (keeps source/layer alive to avoid handler stacking)
         function clearMesh() {
             const source = map.getSource('mesh-nodes');
             if (source) {
@@ -235,13 +180,14 @@
             if (particleSystem) {
                 particleSystem.destroy();
                 particleSystem = null;
+                const btn = document.getElementById('animateBtn');
+                btn.textContent = 'Start Animation';
+                btn.style.background = '#2196F3';
             }
             meshData = null;
         }
 
-        // Load mesh data from API
         async function loadMeshData() {
-            // Cancel any in-flight request
             if (currentAbortController) {
                 currentAbortController.abort();
             }
@@ -255,9 +201,13 @@
 
             try {
                 const timeStr = currentTime.toISOString();
-                const url = `${API_BASE}/mesh?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&time=${timeStr}`;
+                let url = `${API_BASE}/mesh?min_lat=${minLat}&max_lat=${maxLat}&min_lon=${minLon}&max_lon=${maxLon}&time=${timeStr}`;
 
-                console.log('Fetching:', url);
+                // Skip depth data on mobile (only used for click popups)
+                if (Device.isMobile()) {
+                    url += '&include_depth=false';
+                }
+
                 const response = await fetch(url, { signal: currentAbortController.signal });
 
                 if (!response.ok) {
@@ -278,13 +228,13 @@
                 visualizeMesh();
 
             } catch (error) {
-                if (error.name === 'AbortError') return; // Cancelled by newer request
+                if (error.name === 'AbortError') return;
                 setStatus(`Error: ${error.message}`, 'error');
                 console.error('Failed to load mesh:', error);
             }
         }
 
-        // Click handler for node details (defined once, not per-render)
+        // ─── Node click handler ───────────────────────────────────────────
         function handleNodeClick(e) {
             const props = e.features[0].properties;
             const coords = e.features[0].geometry.coordinates.slice();
@@ -296,24 +246,30 @@
             const dirIndex = Math.round(bearing / 45) % 8;
             const dirText = directions[dirIndex];
 
-            new mapboxgl.Popup()
-                .setLngLat(coords)
-                .setHTML(`
-                    <strong>Tidal Current</strong><br/>
-                    <strong>Speed:</strong> ${props.magnitude.toFixed(3)} m/s<br/>
-                    <strong>Direction:</strong> ${bearing.toFixed(0)}° (${dirText})<br/>
-                    <strong>U (East):</strong> ${props.u_vel.toFixed(3)} m/s<br/>
-                    <strong>V (North):</strong> ${props.v_vel.toFixed(3)} m/s<br/>
-                    <strong>Depth:</strong> ${props.depth.toFixed(1)} m
-                `)
-                .addTo(map);
+            const infoHTML = `
+                <strong>Tidal Current</strong><br/>
+                <strong>Speed:</strong> ${props.magnitude.toFixed(3)} m/s<br/>
+                <strong>Direction:</strong> ${bearing.toFixed(0)}&deg; (${dirText})<br/>
+                <strong>U (East):</strong> ${props.u_vel.toFixed(3)} m/s<br/>
+                <strong>V (North):</strong> ${props.v_vel.toFixed(3)} m/s<br/>
+                <strong>Depth:</strong> ${(props.depth || 0).toFixed(1)} m
+            `;
+
+            if (Device.isMobile()) {
+                document.getElementById('drawer-content').innerHTML = infoHTML;
+                nodeDrawer.classList.add('visible');
+            } else {
+                new mapboxgl.Popup()
+                    .setLngLat(coords)
+                    .setHTML(infoHTML)
+                    .addTo(map);
+            }
         }
 
-        // Visualize mesh as points colored by velocity magnitude
+        // ─── Mesh visualization ───────────────────────────────────────────
         function visualizeMesh() {
             if (!meshData) return;
 
-            // Build GeoJSON features
             const { lat, lon, u_velocity, v_velocity, depth } = meshData.nodes;
             const n = lat.length;
             const features = new Array(n);
@@ -334,7 +290,6 @@
 
             const geojsonData = { type: 'FeatureCollection', features: features };
 
-            // Update existing source or create new one (avoids handler stacking)
             const existingSource = map.getSource('mesh-nodes');
             if (existingSource) {
                 existingSource.setData(geojsonData);
@@ -357,11 +312,10 @@
                             1.0, '#ff0000',
                             2.0, '#ff0000'
                         ],
-                        'circle-opacity': 0.7
+                        'circle-opacity': 0
                     }
-                });
+                }, 'waterway-label');
 
-                // Register event handlers once
                 map.on('click', 'mesh-nodes', handleNodeClick);
                 map.on('mouseenter', 'mesh-nodes', () => {
                     map.getCanvas().style.cursor = 'pointer';
@@ -371,7 +325,6 @@
                 });
             }
 
-            // Update statistics
             const magnitudes = features.map(f => f.properties.magnitude);
             const maxMag = Math.max(...magnitudes);
             const avgMag = magnitudes.reduce((a, b) => a + b, 0) / magnitudes.length;
@@ -382,22 +335,30 @@
                 'success'
             );
 
-            // Auto-start or update particle animation
+            // Auto-start or update particle animation with adaptive settings
             if (!particleSystem) {
+                const isMobile = Device.isMobile();
+                const isLowEnd = Device.hasLowMemory() || Device.prefersReducedMotion();
+
                 particleSystem = new ParticleSystem(map, meshData, {
-                    numParticles: 5000,
-                    speedScale: 3000,
-                    maxAge: 100,
-                    trailFade: 0.96,
-                    lineWidth: 1.2
+                    numParticles: isLowEnd ? 800 : (isMobile ? 1200 : 2500),
+                    speedScale: 2,
+                    maxAge: isMobile ? 60 : 80,
+                    trailFade: isMobile ? 0.92 : 0.95,
+                    lineWidth: isMobile ? 1.0 : 1.5,
+                    frameSkip: isLowEnd ? 2 : 1
                 });
+
                 particleSystem.start();
+                const btn = document.getElementById('animateBtn');
+                btn.textContent = 'Stop Animation';
+                btn.style.background = '#4CAF50';
             } else {
                 particleSystem.updateMeshData(meshData);
             }
         }
 
-        // Time control functions
+        // ─── Time controls ────────────────────────────────────────────────
         function adjustTime(hours) {
             currentTime = new Date(currentTime.getTime() + hours * 60 * 60 * 1000);
             updateTimeDisplay();
@@ -419,23 +380,103 @@
             }
         }
 
-        // Event listeners
+        function toggleAnimation() {
+            if (!particleSystem) return;
+            const running = particleSystem.toggle();
+            const btn = document.getElementById('animateBtn');
+            btn.textContent = running ? 'Stop Animation' : 'Start Animation';
+            btn.style.background = running ? '#4CAF50' : '#2196F3';
+        }
+
+        // ─── Event listeners ──────────────────────────────────────────────
         document.getElementById('prevBtn').addEventListener('click', () => adjustTime(-1));
         document.getElementById('nextBtn').addEventListener('click', () => adjustTime(1));
         document.getElementById('nowBtn').addEventListener('click', jumpToNow);
         document.getElementById('timeInput').addEventListener('change', handleTimeInputChange);
+        document.getElementById('animateBtn').addEventListener('click', toggleAnimation);
 
-        // Auto-load on pan/zoom
         map.on('moveend', scheduleLoad);
 
-        // Auto-load on initial map load
         map.on('load', () => {
-            scheduleLoad();
+            map.addSource('mapbox-bathymetry', {
+                type: 'vector',
+                url: 'mapbox://mapbox.terrain-rgb'
+            });
+
+            map.addLayer({
+                id: 'bathymetry-layer',
+                type: 'fill',
+                source: 'mapbox-bathymetry',
+                'source-layer': 'contour',
+                paint: {
+                    'fill-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['get', 'depth'],
+                        0, 'rgba(49, 119, 155, 0.7)',
+                        100, 'rgba(41, 101, 132, 0.7)',
+                        500, 'rgba(33, 83, 109, 0.7)',
+                        1000, 'rgba(25, 65, 86, 0.7)',
+                        2000, 'rgba(17, 47, 63, 0.7)',
+                        5000, 'rgba(9, 29, 40, 0.7)'
+                    ],
+                    'fill-opacity': 0.6
+                },
+                filter: ['all', ['>=', 'depth', 0]]
+            }, 'water');
+
+            map.addLayer({
+                id: 'bathymetry-contours',
+                type: 'line',
+                source: 'mapbox-bathymetry',
+                'source-layer': 'contour',
+                paint: {
+                    'line-color': 'rgba(32, 74, 135, 0.4)',
+                    'line-width': 0.5,
+                    'line-opacity': 0.4
+                },
+                filter: ['all', ['>=', 'depth', 0]]
+            }, 'bathymetry-layer');
+
+            map.addSource('gebco-bathymetry', {
+                type: 'raster',
+                tiles: [
+                    'https://tiles.gebco.net/tiles/gebco_2023_sub_ice/{z}/{x}/{y}.png'
+                ],
+                tileSize: 256,
+                attribution: '&copy; GEBCO'
+            });
+
+            map.addLayer({
+                id: 'gebco-bathymetry-layer',
+                type: 'raster',
+                source: 'gebco-bathymetry',
+                paint: {
+                    'raster-opacity': 0.4,
+                    'raster-color-mix': [0, 0, 0, 0],
+                    'raster-color': [
+                        'interpolate',
+                        ['linear'],
+                        ['raster-value'],
+                        0, 'rgba(49, 119, 155, 0)',
+                        100, 'rgba(41, 101, 132, 0.5)',
+                        1000, 'rgba(33, 83, 109, 0.7)',
+                        3000, 'rgba(25, 65, 86, 0.8)',
+                        5000, 'rgba(17, 47, 63, 0.9)',
+                        8000, 'rgba(9, 29, 40, 1)'
+                    ]
+                }
+            }, 'bathymetry-contours');
+
+            setTimeout(scheduleLoad, 500);
         });
 
-        console.log('Actual Currents Visualization initialized (auto-load enabled)');
-        console.log('API endpoint:', API_BASE);
-        console.log('Min zoom for data:', MIN_ZOOM_FOR_DATA);
+        // Register service worker for PWA
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/sw.js')
+                .then(reg => console.log('SW registered:', reg.scope))
+                .catch(err => console.warn('SW registration failed:', err));
+        }
     </script>
 </body>
 </html>

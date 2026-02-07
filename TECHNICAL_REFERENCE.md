@@ -1,6 +1,6 @@
 # Actual Currents - Technical Reference Document
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-07
 **Purpose:** Cross-conversation reference for AI assistant and developers
 
 ---
@@ -17,13 +17,11 @@ Build a mobile application (iOS/Android) + web app for real-time tidal current v
 
 ### Key Technologies
 - **Backend:** FastAPI (Python 3.11+)
-- **Data Storage:** Zarr format on AWS S3
-- **Mobile:** React Native + Expo (recommended)
-- **Visualization:** WebGL particle animation on unstructured triangular mesh
-- **Web Frontend:** React + TypeScript (recommended)
-- **WebGL Library:** Three.js, regl, or deck.gl (for custom particle system)
-- **Mapping:** Mapbox GL JS (web) + Mapbox Maps SDK (mobile)
-- **Infrastructure:** AWS ECS Fargate + S3 + CloudFront
+- **Data Storage:** Zarr format (local dev / AWS S3 production)
+- **Web Frontend:** Vanilla JS + Canvas2D (current), mobile TBD
+- **Particle Animation:** Canvas2D overlay with trail-effect rendering
+- **Mapping:** Mapbox GL JS v3.0.1
+- **Infrastructure:** AWS S3 (data) + planned ECS Fargate (API)
 
 ---
 
@@ -134,34 +132,12 @@ V_velocity = Σ [ f[i] * v_amp[i] * cos(phase_v[i]) ]
 2. **Reference Time** - ADCIRC reference: 2000-01-01T00:00:00Z
 3. **Latitude for Nodal** - Config setting: 55.0°N (can be adjusted)
 
-### Current Implementation Status
+### Implementation Status
 - **File:** `backend/app/core/tidal_calc.py`
-- **Status:** ✅ Implemented (2026-02-05) - ⚠️ Needs full API testing
+- **Status:** ✅ Implemented and verified (2026-02-05)
 - **Implementation:** Complete with ttide integration
-- **Testing:** Algorithm tested in isolation (works), full API endpoint not yet verified
-- **Priority:** HIGH - verify with real Zarr data
-
-### Implementation TODO
-```python
-def predict_currents(
-    u_amp: np.ndarray,      # Shape: (n_nodes, 8)
-    v_amp: np.ndarray,      # Shape: (n_nodes, 8)
-    u_phase: np.ndarray,    # Shape: (n_nodes, 8)
-    v_phase: np.ndarray,    # Shape: (n_nodes, 8)
-    tidefreqs: np.ndarray,  # Shape: (8,)
-    time_utc: datetime,
-    lat: float = 55.0
-) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Returns: (u_velocity, v_velocity) in m/s
-    """
-    # 1. Convert time to Julian date
-    # 2. Get nodal corrections (v, u, f) from ttide
-    # 3. Calculate omega*t for each constituent
-    # 4. Apply harmonic synthesis
-    # 5. Return instantaneous velocities
-    pass
-```
+- **Testing:** Verified with real Zarr data, Woods Hole MA test confirms realistic velocities
+- **Algorithm:** `velocity = Σ [f[i] * amp[i] * cos(v + ω*t + u - phase)]` for each constituent
 
 ---
 
@@ -259,102 +235,78 @@ def predict_currents(
 ## 5. FRONTEND VISUALIZATION (WEB)
 
 ### Current Implementation
-**File:** `frontend/index.html`
-**Status:** 🚧 Basic prototype
+**Files:** `frontend/index.html` (458 lines) + `frontend/js/particles.js` (622 lines)
+**Status:** ✅ Fully functional with particle animation
 
 **Technologies:**
 - Mapbox GL JS v3.0.1
-- Pure HTML/JavaScript (no build step yet)
-- No Node.js required (for now)
-
-**Mapbox Token:** `pk.eyJ1IjoibHVrYWNhdGlwb3ZpYyIsImEiOiJjbWtoZHZxa2wwamR6M2Nvb3Y5cGJubTQwIn0.iuVLjdpQvRkHoxPV9IsUvg`
+- Canvas2D overlay for particle animation
+- Pure HTML/JavaScript (no build step)
+- No Node.js required
 
 **Current Features:**
-1. Map centered on Mid-Atlantic (-75°, 35°)
+1. Map centered on New England (-70°, 41°), zoom 7
 2. **Auto-loading** - nodes load automatically as user pans/zooms (zoom 8+)
-3. Velocity-colored node visualization (blue→green→yellow→red)
-4. Debounced API calls (300ms) with request cancellation on new pan
+3. Velocity-colored node visualization (circle layer, opacity 0 — particles are primary visual)
+4. Debounced API calls (100ms) with AbortController request cancellation
 5. Minimum zoom threshold (zoom 8+) to prevent overloading
 6. Time controls (+1h/-1h, datetime picker, "Jump to Now")
 7. Interactive popups (speed, direction, depth on click)
 8. Statistics display (avg/max velocity)
-9. Velocity legend
-10. "Start Animation" button (placeholder for future particle system)
+9. Velocity legend (4-band: calm/moderate/strong/very strong)
+10. **Particle flow animation** - windy-style flowing particles with trails
+11. Animation toggle button (Start/Stop Animation)
 
 **Auto-Load Behavior:**
 - Listens to Mapbox `moveend` event (fires after pan/zoom completes)
-- Debounced: waits 300ms after last movement before fetching
+- Debounced: waits 100ms after last movement before fetching
 - Uses `AbortController` to cancel in-flight requests when user pans again
 - Below zoom 8: shows "Zoom in to see tidal currents" message
 - Handles API errors gracefully (404 = no data, 400 = too many nodes)
 - Source data updated via `setData()` (not remove/re-add) to prevent event handler stacking
+- Particle system auto-starts on data load, updates on pan/zoom
 
-**Visualization Method:**
-- Nodes displayed as GeoJSON point features
-- Mapbox circle layer with 3px radius, 0.7 opacity
-- Color interpolation by velocity magnitude (blue→green→yellow→red)
+### Particle Animation System (`frontend/js/particles.js`)
 
-### Next Steps for Visualization
+**`TriangleSpatialIndex` class:**
+- 50x50 grid overlay for fast point-in-triangle lookup
+- Maps each triangle's bounding box to intersecting grid cells
+- `findTriangle(lat, lon)` returns triangle index in O(1) average
+- `getBarycentricCoords(lat, lon, tIdx)` for interpolation weights
+- Point-in-triangle test with `1e-6` tolerance for edge cases
 
-#### Phase 1: Real Velocity Data
-**Priority:** HIGH
-1. Implement `tidal_calc.py` prediction algorithm
-2. Update `/api/v1/mesh` endpoint to return real velocities
-3. Verify velocity magnitude and direction in frontend
+**`ParticleSystem` class:**
+- Canvas2D overlay attached to `map.getCanvasContainer()` (correct positioning)
+- HiDPI support: canvas sized at `clientWidth * devicePixelRatio`
+- Trail fade via `destination-in` composite + semi-transparent fill each frame
+- Speed-based coloring: 12-stop gradient (deep blue → cyan → green → yellow → orange → red)
+- 10 color buckets for efficient batched Canvas2D strokes
+- Pixel-space movement: `map.project()` → offset by velocity × adaptiveScale → `map.unproject()`
+- Adaptive speed scaling based on map area: `speedScale * mapArea^0.4`
+- Particles respawn when: age exceeds maxAge, or position falls outside triangle mesh
+- Clears trails on map move, reinitializes particles on new data
 
-#### Phase 2: WebGL Particle System
-**Priority:** HIGH (visual QC requirement)
-
-**Architecture:**
-```
-1. Triangle Spatial Index
-   - Build grid overlay (e.g., 100x100 cells)
-   - Map each triangle to grid cells it intersects
-   - Fast lookup: "which triangles contain point (x,y)?"
-
-2. Particle Initialization
-   - Spawn N particles (e.g., 10,000) in viewport
-   - Random positions or density-based
-
-3. Particle Animation Loop (60 FPS)
-   For each particle:
-     a. Find containing triangle (use spatial index)
-     b. Calculate barycentric coordinates within triangle
-     c. Interpolate U/V velocity from 3 triangle vertices
-     d. Update particle position: pos += velocity * dt
-     e. Fade/respawn particles at boundaries
-
-4. GPU Rendering
-   - WebGL points or instanced quads
-   - Vertex shader: transform particle positions
-   - Fragment shader: particle appearance (glow, trail)
-   - Optional: velocity-based coloring
-```
+**Current Parameters:**
+- `numParticles`: 2500
+- `speedScale`: 2 px/frame per m/s (with adaptive scaling)
+- `maxAge`: 80 frames (~1.3s at 60fps)
+- `trailFade`: 0.95 (trails persist ~20 frames)
+- `lineWidth`: 1.5px
 
 **Barycentric Interpolation:**
 ```javascript
-// Given triangle with vertices (v0, v1, v2) and velocities (u0,v0), (u1,v1), (u2,v2)
-// Particle at point P with barycentric coords (w0, w1, w2)
-// where w0 + w1 + w2 = 1
-
-u_particle = w0 * u0 + w1 * u1 + w2 * u2
-v_particle = w0 * v0 + w1 * v1 + w2 * v2
+// For particle at point P inside triangle (v0, v1, v2):
+// Compute barycentric weights (w0, w1, w2) where w0 + w1 + w2 = 1
+u_particle = w0 * u[v0] + w1 * u[v1] + w2 * u[v2]
+v_particle = w0 * v[v0] + w1 * v[v1] + w2 * v[v2]
 ```
 
-**Why NOT Leaflet.Velocity or similar:**
-- Those plugins expect **regular grids** (raster data)
-- Our mesh is **irregular/unstructured** (adaptive triangulation)
-- Custom WebGL provides full control for triangular mesh
-
-**Reference Implementation:**
-- Check `old/` directory for MVP particle system (if exists)
-- Look for triangle search, barycentric code
-
-#### Phase 3: Performance Optimization
-- Spatial index caching
-- Web Workers for particle updates
-- LOD (Level of Detail) - reduce particles when zoomed out
-- Lazy loading chunks as user pans
+### Future Frontend Improvements
+- WebGL rendering (regl or raw WebGL) for 10k+ particles at higher FPS
+- Web Workers for particle update computation (offload main thread)
+- Level-of-detail: reduce particle count when zoomed out
+- Time animation playback (auto-advance time, show tidal cycle)
+- Mobile-responsive UI
 
 ---
 
@@ -501,19 +453,25 @@ python scripts/convert_to_zarr.py
   - API limits
   - Reference time for tidal calculations
 
-- `backend/app/core/tidal_calc.py` - **✅ IMPLEMENTED (2026-02-05)**
+- `backend/app/core/tidal_calc.py` - **✅ COMPLETE**
   - Contains `predict_currents()` function
   - ttide integration for nodal corrections (v, u, f factors)
   - Harmonic synthesis algorithm
-  - Tested in isolation with synthetic data - working correctly
-  - **Next:** Verify with real Zarr data through API endpoint
+  - Verified with real Zarr data through API endpoint
 
 ### Frontend
-- `frontend/index.html` - **Web visualization**
-  - Mapbox GL JS integration
-  - Basic mesh visualization
-  - API client code
-  - Ready for WebGL particle system integration
+- `frontend/index.html` - **Web visualization** ✅ COMPLETE
+  - Mapbox GL JS integration with auto-load on pan/zoom
+  - Velocity-colored nodes, time controls, interactive popups
+  - Particle system integration (auto-start, toggle, update on pan)
+  - 458 lines
+
+- `frontend/js/particles.js` - **Particle animation system** ✅ COMPLETE
+  - `TriangleSpatialIndex`: 50x50 grid for fast triangle lookup
+  - `ParticleSystem`: Canvas2D overlay with trail-effect rendering
+  - Barycentric interpolation, speed-based coloring (12-stop gradient)
+  - Pixel-space movement for zoom-independent visual speed
+  - 622 lines
 
 ### Configuration
 - `backend/requirements.txt` - **Python dependencies**
@@ -536,276 +494,142 @@ python scripts/convert_to_zarr.py
 
 ---
 
-## 10. TECH STACK RECOMMENDATIONS
+## 10. TECH STACK (CURRENT + PLANNED)
 
-### Full Stack Overview
+### Current Stack
 
-| Layer | Technology | Status | Rationale |
-|-------|-----------|--------|-----------|
-| **Backend API** | FastAPI (Python 3.11+) | ✅ Implemented | Excellent for data APIs, async support, automatic docs |
-| **Data Storage** | Zarr + AWS S3 | ✅ Deployed | Optimized for chunked geospatial queries, cloud-native |
-| **Web Frontend** | React + TypeScript | 🚧 Recommended | Type safety, component reuse, large ecosystem |
-| **Mobile Framework** | React Native + Expo | ⏳ Planned | Code sharing with web, single codebase for iOS/Android |
-| **WebGL Rendering** | regl or Three.js | ⏳ To Build | Cross-platform WebGL, works on web + mobile |
-| **Mapping** | Mapbox GL JS (web)<br>Mapbox Maps SDK (mobile) | 🚧 Web Started | Consistent UX, already integrated on web |
-| **State Management** | Zustand or Jotai | ⏳ To Decide | Lightweight, works across React/React Native |
-| **Build Tools** | Vite (web) + Expo (mobile) | ⏳ To Setup | Fast dev experience, modern tooling |
+| Layer | Technology | Status |
+|-------|-----------|--------|
+| **Backend API** | FastAPI (Python 3.11+) | ✅ Implemented |
+| **Data Storage** | Zarr (local dev / AWS S3 prod) | ✅ Deployed |
+| **Web Frontend** | Vanilla JS + Mapbox GL JS v3.0.1 | ✅ Implemented |
+| **Particle Rendering** | Canvas2D overlay | ✅ Implemented |
+| **Compression** | GZip middleware (starlette) | ✅ Implemented |
 
-### Mobile Framework Decision
+### Mobile Strategy (TBD)
 
-**Recommended: React Native + Expo**
-- ✅ Code sharing with web frontend (business logic, API clients, particle physics)
-- ✅ Single codebase for iOS and Android
-- ✅ expo-gl provides WebGL support for particle rendering
-- ✅ Faster iteration with hot reload
-- ⚠️ Slightly lower performance than native (acceptable for this use case)
+Options under consideration (see Phase 5 in Next Steps):
+1. **PWA** - Wrap current web app, easiest path
+2. **Capacitor** - Native shell around web app
+3. **React Native + Expo** - Native mobile with code sharing
+4. **Native Swift/Kotlin** - Maximum performance (likely overkill)
 
-**Alternative: Flutter**
-- ✅ Truly native performance
-- ✅ Beautiful UI out of the box
-- ⚠️ No code sharing with React web
-- ⚠️ Dart language (separate from TypeScript)
-
-**Alternative: Native Swift/Kotlin**
-- ✅ Maximum performance
-- ✅ Full platform API access
-- ⚠️ 2x development effort (separate iOS and Android codebases)
-- ⚠️ No code sharing with web
-
-### WebGL Library for Particle Animation
-
-**For Unstructured Mesh + Particles:**
-
-| Library | Pros | Cons | Recommendation |
-|---------|------|------|----------------|
-| **regl** | Lightweight, functional API, low-level control | More code required | ✅ Best for custom particle system |
-| **Three.js** | Full 3D engine, large community | Heavier bundle size | ✅ Good if adding 3D features later |
-| **deck.gl** | Built-in geospatial layers | Designed for regular grids | ❌ Not ideal for triangular mesh |
-| **Raw WebGL** | Maximum control | Very verbose | ❌ Unnecessary complexity |
-
-**Recommended: regl**
-- Perfect for custom particle systems
-- Works on web (via bundler) and React Native (via expo-gl)
-- Functional API is easier to reason about than raw WebGL
-- Small bundle size (~100KB)
-
-### Code Sharing Strategy
-
-```
-shared/
-├── api/              # API client, types
-├── physics/          # Particle simulation, barycentric interpolation
-├── spatial/          # Triangle search, spatial indexing
-└── tidal/            # Tidal calculation formulas (if needed client-side)
-
-web/
-├── components/       # React components
-├── webgl/            # WebGL particle renderer (regl)
-└── mapbox/           # Mapbox integration
-
-mobile/
-├── screens/          # React Native screens
-├── webgl/            # expo-gl particle renderer (regl)
-└── mapbox/           # Mapbox Maps SDK integration
-```
-
-**Shared logic (70% of codebase):**
-- API calls and data fetching
-- Particle physics and interpolation algorithms
-- Spatial indexing and triangle search
-- State management
-- Business logic
-
-**Platform-specific (30%):**
-- Map component wrappers
-- WebGL context initialization
-- Navigation and UI chrome
-- Platform permissions (location, etc.)
+### Future Rendering Upgrade Path
+Current Canvas2D works well for 2500 particles. If more particles or higher FPS needed:
+- **regl** - Lightweight functional WebGL, good for custom particle systems
+- **Three.js** - Full 3D engine, if adding depth visualization later
 
 ---
 
 ## 11. NEXT STEPS (PRIORITY ORDER)
 
-### Phase 1: Real Velocity Data (HIGH PRIORITY) 🔴
-**Goal:** Get actual tidal predictions working
+### ✅ Completed Phases
 
-**Status:** ✅ Implementation COMPLETE (2026-02-05) - ⚠️ Full API testing PENDING
+**Phase 1: Tidal Prediction API** - ✅ COMPLETE (2026-02-05)
+- Harmonic synthesis with ttide nodal corrections
+- Vectorized element filtering (3000x speedup)
+- API returns accurate tidal currents in <0.02s (after first request)
 
-**Completed Tasks:**
-1. ✅ **Implemented `backend/app/core/tidal_calc.py`**
-   - Used ttide library for nodal corrections (v, u, f)
-   - Implemented harmonic synthesis: `velocity = Σ [f[i] * amp[i] * cos(v + ω*t + u - phase)]`
-   - Handled matplotlib date conversion (`date2num() + 366`)
-   - Reference time: 2000-01-01T00:00:00Z
-   - Constituent index mapping for standard ADCIRC constituents
-   - Tested with synthetic data - velocities change correctly with time
+**Phase 2: Map Visualization** - ✅ COMPLETE (2026-02-05)
+- Velocity-colored nodes, time controls, interactive popups, statistics, legend
 
-2. ✅ **Integrated into `/api/v1/mesh` endpoint**
-   - Replaced placeholder `(0.0, 0.0)` with `predict_currents()` call
-   - Extracts constituent data from Zarr (u_amp, v_amp, u_phase, v_phase, tidefreqs)
-   - Handles time parameter from query string (ISO 8601 format)
-   - Uses config.LATITUDE_FOR_NODAL (55.0°N) for nodal corrections
+**Phase 3: Particle Animation** - ✅ COMPLETE (2026-02-07)
+- Canvas2D particle system with triangle spatial index + barycentric interpolation
+- Speed-based coloring, trail effects, auto-start on data load
 
-**Pending Tasks:**
-3. ⚠️ **Test with real Zarr data through API** (30-60 mins)
-   - Verify API endpoint returns non-zero velocities
-   - Test with strong tidal areas: Miami/Florida Keys, NYC Harbor
-   - Verify magnitude ranges (0-2 m/s typical, up to 5 m/s in straits)
-   - Check velocity reversal over ~6-hour tidal cycle
-   - Compare predictions with expected tidal patterns
-
-**Acceptance Criteria:**
-- [x] `predict_currents()` function implemented and working
-- [x] Function integrated into `/api/v1/mesh` endpoint
-- [ ] `/api/v1/mesh?time=2026-02-05T12:00:00Z&...` verified with real data
-- [ ] Velocities have reasonable magnitudes (0-2 m/s typical)
-- [ ] Flow directions change over ~6-hour tidal cycle
-
-**Implementation Details:**
-- Algorithm based on old MVP reference code (`old/backend.py`)
-- ttide requires constituent indices (not names) - hardcoded standard mapping
-- Nodal corrections returned in "cycles" - converted to radians by multiplying by 2π
-- Frequencies in rad/s, time delta calculated in seconds from REFERENCE_TIME
+**Data Optimization** - ✅ COMPLETE (2026-02-06)
+- Hilbert curve ordering, 10k-node chunks, direct numpy indexing
+- GZip compression, MeshData RAM pre-loading, 0.017s per request
 
 ---
 
-### Phase 2: WebGL Particle System (HIGH PRIORITY) 🔴
-**Goal:** Visual QC of tidal predictions through particle animation
+### Phase 4: S3 Data Access (HIGH PRIORITY) 🔴
+**Goal:** Load harmonic constituents from AWS S3 instead of local Zarr
 
-**Status:** ⏳ Not started
+**Current State:**
+- Data already on S3: `s3://actual-currents-data/adcirc54.zarr` (us-east-2, 266 MiB)
+- Backend already has S3 code path (`DATA_SOURCE=S3` in config)
+- Currently using `DATA_SOURCE=LOCAL` for development
+- S3 path was tested previously (info endpoint worked, mesh endpoint untested with optimized code)
 
 **Tasks:**
-1. **Build Triangle Spatial Index** (1 hour)
-   - Create 100x100 grid overlay for viewport
-   - Map each triangle to grid cells it intersects
-   - Enables fast "which triangle contains point (x,y)?" lookup
-
-2. **Implement Barycentric Interpolation** (1 hour)
-   - Point-in-triangle test (cross product method)
-   - Calculate barycentric weights (w0, w1, w2)
-   - Interpolate velocity: `u = w0*u0 + w1*u1 + w2*u2`
-
-3. **WebGL Particle Renderer** (2 hours)
-   - Initialize 10,000 particles in viewport
-   - Render loop (60 FPS):
-     - Find containing triangle (use spatial index)
-     - Interpolate U/V velocity
-     - Update position: `pos += velocity * dt`
-     - Fade/respawn at boundaries
-   - Use `regl` library for cleaner WebGL code
-
-4. **Visual QC Verification**
-   - [ ] Particles flow smoothly (no jumps or artifacts)
-   - [ ] Strong currents in channels, inlets, straits
-   - [ ] Weaker currents in open ocean
-   - [ ] Flow reverses with tidal cycle (~6-12 hours)
-   - [ ] Magnitude visualization matches expected patterns
-
-**Acceptance Criteria:**
-- [ ] 10k+ particles rendering at 60 FPS
-- [ ] Particles follow triangular mesh interpolation
-- [ ] Visual confirmation that tidal predictions are realistic
+1. Test `DATA_SOURCE=S3` with current MeshData pre-loading approach
+   - The current approach loads ALL arrays into RAM at startup
+   - This means one large S3 read (~266 MB) on cold start, then pure numpy
+   - Verify startup time and first-request latency over network
+2. Consider startup optimization if S3 load is too slow
+   - Lazy loading (only load constituent arrays when first mesh query comes in)
+   - Or pre-download Zarr to local disk on container startup
+3. Verify deployed API works with S3 credentials (IAM role vs env vars)
 
 ---
 
-### Phase 3: Web Frontend Refinement (MEDIUM PRIORITY) 🟡
-**Goal:** Production-ready web application
+### Phase 5: Mobile Structure (HIGH PRIORITY) 🔴
+**Goal:** Make the app work well on iOS and Android
 
-**Status:** 🚧 Basic prototype exists (frontend/index.html)
+**Options to evaluate:**
+1. **Progressive Web App (PWA)** - Easiest path
+   - Make current web app responsive and installable
+   - Service worker for offline caching
+   - No app store needed, works on all devices
+   - Limitation: no push notifications on iOS (without native wrapper)
+
+2. **Capacitor/Ionic wrapper** - Web app in native shell
+   - Wraps existing HTML/JS in native WebView
+   - Access to native APIs (GPS, push notifications)
+   - Single codebase for web + iOS + Android
+   - App store distribution
+
+3. **React Native + Expo** - Native mobile app
+   - More native feel, better performance
+   - Requires rewriting UI in React Native
+   - expo-gl for WebGL particle rendering
+   - Separate codebase from web (shared logic possible)
+
+4. **Native Swift/Kotlin** - Maximum performance
+   - 2x development effort
+   - Best platform integration
+   - Likely overkill for this use case
+
+---
+
+### Phase 6: UI/UX Improvements (MEDIUM PRIORITY) 🟡
+**Goal:** Make the app visually polished and user-friendly
 
 **Tasks:**
-1. **Migrate to React + TypeScript** (3-4 hours)
-   - Set up Vite project
-   - Component structure: Map, ParticleLayer, Controls, Timeline
-   - Move existing Mapbox code into React components
-
-2. **Time Controls UI** (2 hours)
-   - Date/time picker
-   - Play/pause animation
-   - Speed control (1x, 2x, 5x, 10x)
-   - Display current tidal phase
-
-3. **Performance Optimization** (2 hours)
-   - Implement LRU cache for API responses
-   - Web Workers for particle updates
-   - Level-of-detail: reduce particle count when zoomed out
-   - Lazy load chunks as user pans
-
-4. **Visual Polish**
-   - Velocity color scale legend
-   - Loading states and error handling
-   - Responsive design (mobile browser support)
+1. **Dark/nautical theme** - Ocean-appropriate color scheme
+2. **Responsive layout** - Controls that work on mobile screens
+3. **Time animation playback** - Play/pause to watch tidal cycle unfold
+4. **Speed controls** - 1x, 2x, 5x, 10x time advancement
+5. **Improved legend** - Gradient color bar instead of discrete blocks
+6. **Loading states** - Skeleton/spinner during data fetch
+7. **Location search** - Geocoding to jump to named locations
+8. **Bathymetry styling** - Better depth visualization under particles
 
 ---
 
-### Phase 4: React Native Mobile App (MEDIUM PRIORITY) 🟡
-**Goal:** iOS and Android apps
-
-**Status:** ⏳ Not started
-
-**Tasks:**
-1. **Expo Setup** (1 hour)
-   - Initialize Expo project with TypeScript
-   - Configure Mapbox Maps SDK for React Native
-   - Set up expo-gl for WebGL
-
-2. **Shared Code Integration** (2 hours)
-   - Move API client, types, particle physics to `shared/` directory
-   - Use Yarn workspaces or npm workspaces for monorepo
-   - Import shared code into mobile project
-
-3. **Mobile-Specific Features** (3-4 hours)
-   - GPS location integration
-   - "My Location" button
-   - Offline support (cache recently viewed regions)
-   - Native navigation (React Navigation)
-
-4. **Platform Builds**
-   - iOS simulator testing
-   - Android emulator testing
-   - TestFlight beta (iOS)
-   - Google Play internal testing (Android)
-
----
-
-### Phase 5: Production Deployment (LOW PRIORITY) 🟢
+### Phase 7: Production Deployment (LOW PRIORITY) 🟢
 **Goal:** Scalable cloud infrastructure
 
-**Status:** ⏳ Data on S3, API not deployed yet
-
 **Tasks:**
-1. **Docker Containerization** (1 hour)
-   - Multi-stage Dockerfile
-   - Python 3.11 slim base image
-   - Health check endpoint
-
-2. **AWS ECS Fargate** (2-3 hours)
-   - ECS cluster and task definition
-   - Application Load Balancer
-   - Auto-scaling configuration
-   - CloudWatch logging
-
-3. **CloudFront CDN** (1 hour)
-   - Serve static web assets from S3
-   - Edge caching for API responses
-   - Custom domain (optional)
-
-4. **CI/CD Pipeline** (2 hours)
-   - GitHub Actions workflow
-   - Run tests on PR
-   - Deploy to staging on merge to `develop`
-   - Deploy to production on merge to `main`
+1. Docker containerization (multi-stage build, Python 3.11 slim)
+2. AWS ECS Fargate deployment
+3. CloudFront CDN for static assets
+4. CI/CD pipeline (GitHub Actions)
+5. Custom domain + SSL
 
 ---
 
-### Future Enhancements (BACKLOG) 📋
+### Future Enhancements (BACKLOG)
+- WebGL particle rendering (regl) for 10k+ particles
+- Web Workers for particle computation
 - Multi-day time-series predictions
-- Current speed/direction at specific point (tap on map)
 - Save favorite locations
 - Push notifications for strong current events
-- Integrate weather/wind data
+- Integrate weather/wind data overlay
 - 3D visualization (depth layers)
 - Export data as CSV/GeoJSON
+- Offline support (cache recently viewed regions)
 
 ---
 
@@ -866,943 +690,77 @@ mobile/
 
 ---
 
-## 15. CURRENT PROGRESS & NEXT STEPS
-
-**Last Updated:** 2026-02-05 22:00 UTC
-
-### 🎉 EXECUTIVE SUMMARY
-
-**Phase 1: Tidal Prediction API** - ✅ **COMPLETE**
-- Implemented harmonic synthesis algorithm with ttide nodal corrections
-- Optimized element filtering (vectorized numpy - 3000x speedup)
-- API returns real tidal current predictions in <4 seconds
-- Verified with Woods Hole, MA test - velocities change correctly with tidal cycle
-
-**Phase 2: Map Visualization** - ✅ **COMPLETE & TESTED**
-- ✅ Fixed critical Zarr loading issue (consolidated=False)
-- ✅ Velocity data displayed on map (colored nodes by magnitude)
-- ✅ Time controls working (+1h/-1h, datetime picker, jump to now)
-- ✅ Interactive popups showing velocity details on node click
-- ✅ Velocity legend (blue=calm, green=moderate, yellow=strong, red=very strong)
-- ✅ Statistics display (avg/max velocity)
-- ✅ User-tested and confirmed working with Woods Hole area
-
-**Phase 3: Particle Animation** - ⏳ **NEXT PRIORITY**
-- Goal: WebGL particle system with barycentric interpolation
-- Will enable visual QC of tidal flow patterns
-- Foundation ready: mesh data and velocities available
-
----
-
-### 🎉 CURRENT STATUS SUMMARY
-
-**Phase 1 & 2:** ✅ 100% COMPLETE - Full tidal visualization working!
-
-**What Works:**
-- ✅ Tidal prediction algorithm implemented and VERIFIED (`tidal_calc.py`)
-- ✅ API endpoint `/api/v1/mesh` working reliably (Zarr loading fixed)
-- ✅ Map visualization displaying velocity-colored nodes
-- ✅ Time controls functional (+1h/-1h, datetime picker, jump to now)
-- ✅ Interactive popups with velocity/depth details
-- ✅ Velocities change correctly with tidal cycle (6-12 hour periods)
-- ✅ Element filtering optimized (vectorized numpy - 3000x faster)
-- ✅ Sub-5-second response times for typical queries
-- ✅ User-tested and confirmed working
-
-**Test Results (Woods Hole, MA - 299 nodes):**
-- Response time: **~4 seconds**
-- U velocities: -0.80 to 0.04 m/s
-- V velocities: -0.19 to 0.54 m/s
-- Flow direction **reverses over 6-hour tidal cycle** ✅
-- Magnitudes realistic for known strong tidal area
-- Visualization displays colored dots (blue=calm, green/yellow/red=stronger currents)
-
-**Next Priority:**
-Build WebGL particle animation system for enhanced visual QC and user experience
-
----
-
-### Recently Completed (2026-02-05 Evening)
-
-#### 🐛 Critical Bug Fix - Zarr Loading Hang (2026-02-05 22:00 UTC)
-**Problem:** API endpoint `/api/v1/mesh` was timing out on all requests, hanging indefinitely
-
-**Root Cause:**
-- Zarr store was opened with `consolidated=True` flag
-- Local Zarr directory had no `.zmetadata` file (consolidated metadata)
-- `xr.open_zarr()` hung waiting for consolidated metadata that didn't exist
-
-**Solution:**
-- Changed `consolidated=True` to `consolidated=False` in `get_dataset()` function
-- Both LOCAL and S3 data sources updated (lines 29 and 36 in `currents.py`)
-
-**Files Modified:**
-- `backend/app/api/currents.py` - Line 29 and 36
-
-**Result:**
-- ✅ API now responds in <5 seconds for Woods Hole query (299 nodes)
-- ✅ Visualization working and tested by user
-- ✅ All features functional (time controls, popups, statistics)
-
-**Note:** If consolidated metadata is desired for performance, run:
-```python
-import zarr
-zarr.consolidate_metadata('data/adcirc54.zarr')
-```
-
-#### ✅ Phase 2: Map Visualization - COMPLETE (2026-02-05 21:30 UTC)
-**Files Modified:**
-- `frontend/index.html` - UPDATED (velocity visualization, time controls, interactive features)
-
-**Implementation Details:**
-1. **Velocity Magnitude Coloring**
-   - Calculates `magnitude = sqrt(u² + v²)` for each node
-   - Color interpolation: blue (0.0) → green (0.3) → yellow (0.6) → red (1.0+ m/s)
-   - Circle radius: 3px with 0.7 opacity
-
-2. **Time Controls**
-   - Datetime picker for selecting any time
-   - +1h / -1h buttons for stepping through tidal cycle
-   - "Jump to Now" button to reset to current time
-   - Time display shows formatted local time with timezone
-
-3. **Interactive Features**
-   - Click on any node to see popup with:
-     - Current speed and direction (compass bearing)
-     - U (eastward) and V (northward) components
-     - Bathymetric depth
-   - Cursor changes to pointer on node hover
-   - Statistics display: average and max velocity for visible area
-
-4. **Velocity Legend**
-   - Color scale reference in bottom-left corner
-   - Four velocity ranges with labels
-
-**Testing Recommendations:**
-- Use Woods Hole, MA area for strong tidal currents
-- Step through time in 1-hour increments to see tidal cycle (should reverse ~every 6 hours)
-- Compare different times to verify flow patterns change
-- Check that velocity magnitudes are reasonable (0.1-1.5 m/s typical)
-
-#### ✅ Phase 1: Tidal Prediction Algorithm - COMPLETE
-**Files Modified:**
-- `backend/app/core/tidal_calc.py` - NEW FILE (136 lines)
-- `backend/app/api/currents.py` - UPDATED (tidal prediction integration + performance optimizations)
-- `backend/.env` - UPDATED (added LOCAL data source support)
-- `backend/app/core/config.py` - UPDATED (config for LOCAL/S3 data sources)
-
-**Implementation Details:**
-1. Created `predict_currents()` function implementing harmonic synthesis
-2. Integrated ttide library for astronomical nodal corrections:
-   - v (equilibrium argument) - in cycles, converted to radians
-   - u (Greenwich phase lag) - in cycles, converted to radians
-   - f (nodal amplitude correction) - dimensionless scaling factor
-3. Time handling:
-   - Accepts datetime objects (timezone-aware)
-   - Converts to matplotlib date format: `date2num(time_utc) + 366`
-   - Calculates seconds since ADCIRC reference time (2000-01-01 00:00:00 UTC)
-4. Constituent mapping:
-   - Hardcoded standard ADCIRC constituents (M2, S2, N2, K1, O1, P1, M4, M6)
-   - ttide expects indices, not names - created mapping dictionary
-5. Algorithm:
-   ```python
-   for each constituent i:
-       phase_u = v[i] + omega[i]*t + u[i] - u_phase[:,i]
-       phase_v = v[i] + omega[i]*t + u[i] - v_phase[:,i]
-       u_velocity += f[i] * u_amp[:,i] * cos(phase_u)
-       v_velocity += f[i] * v_amp[:,i] * cos(phase_v)
-   ```
-
-6. Testing performed:
-   - ✅ Tested with synthetic data (5 nodes, 8 constituents)
-   - ✅ Verified velocities change with time (6-hour difference shows tidal cycle)
-   - ✅ Magnitudes in expected range (0.5-1.5 m/s for test data)
-   - ✅ **Full API endpoint tested with real Zarr data - WORKING**
-   - ✅ **Woods Hole, MA test:** 299 nodes, velocities -0.80 to 0.54 m/s
-   - ✅ **Tidal cycle verified:** Flow reverses over 6-12 hour periods
-
-**Integration into API:**
-- Updated `/api/v1/mesh` endpoint in `currents.py`
-- Extracts constituent data from Zarr for nodes in bounding box
-- Parses ISO 8601 time parameter or uses current UTC time
-- Calls `predict_currents()` and returns real tidal velocities
-- Returns velocities as JSON arrays
-
-#### ✅ Critical Performance Optimization
-**Problem:** Original element filtering used Python loop iterating through 3.77M elements - caused 60+ second hangs
-
-**Solution:** Vectorized filtering using numpy (lines 79-85 in currents.py):
-```python
-# Old (slow): Python for loop - iterates 3.77M times
-for elem_idx in range(len(all_elements)):
-    if all(node_idx in node_indices_set for node_idx in elem_nodes):
-        valid_elements.append(elem_nodes)
-
-# New (fast): Vectorized numpy operations
-mask_0 = np.isin(all_elements[:, 0], node_indices)
-mask_1 = np.isin(all_elements[:, 1], node_indices)
-mask_2 = np.isin(all_elements[:, 2], node_indices)
-valid_mask = mask_0 & mask_1 & mask_2
-valid_elements = all_elements[valid_mask]
-```
-
-**Performance Impact:**
-- **Before:** 60+ seconds (timeout)
-- **After:** 0.01-0.02 seconds (3000x faster!)
-- **Total query time:** 3-4 seconds for typical requests
-
-#### ✅ LOCAL vs S3 Data Source Support
-**Problem:** S3 queries were timing out during development/testing
-
-**Solution:** Added LOCAL data source option for faster iteration:
-- `.env` file: Set `DATA_SOURCE=LOCAL` or `DATA_SOURCE=S3`
-- `LOCAL_ZARR_PATH` config setting for local file path
-- `get_dataset()` function handles both sources
-- LOCAL data much faster for development (no network latency)
-
-**Current Setup:**
-- Development: Using LOCAL data (`/Users/lukacatipovic/actual-currents/data/adcirc54.zarr`)
-- Production (planned): Will use S3 data once deployed
-
-#### ✅ AWS S3 Configuration (2026-02-05 19:45 UTC)
-**Files Modified:**
-- `backend/.env` - NEW FILE (created with S3 configuration)
-- AWS credentials from `~/.aws/credentials` being used automatically
-
-**Configuration Details:**
-- Created `.env` file with `DATA_SOURCE=S3`
-- S3 bucket: `actual-currents-data` (us-east-2)
-- AWS SDK automatically using credentials from `~/.aws/credentials` (default profile)
-- Verified `/api/v1/info` endpoint works - successfully loads data from S3
-
-**Testing Status:**
-- ✅ Server starts successfully
-- ✅ `/api/v1/info` endpoint works (returns 2M+ nodes, 8 constituents, frequency data)
-- ❌ `/api/v1/mesh` endpoint **hanging/timing out** (60+ seconds, no response)
-
-#### 🔧 ttide Library Investigation (2026-02-05 19:45 UTC)
-**Problem:** API endpoint hanging when calling tidal prediction algorithm
-
-**Actions Taken:**
-1. Moved ttide library source code locally to `backend/lib/ttide_py-master`
-2. Examined source code:
-   - `t_vuf.py` - Main nodal correction function
-   - `t_getconsts.py` - Loads constituent data from NetCDF files at import time
-   - Found data files exist: `t_constituents_const.nc`, `t_constituents_sat.nc`, `t_constituents_shallow.nc`
-3. Updated `backend/requirements.txt` to use local ttide:
-   - Changed from `ttide==0.3.1` to `-e ./lib/ttide_py-master`
-4. Reinstalled ttide from local directory: `pip install -e ./lib/ttide_py-master`
-5. Tested ttide in isolation - **works correctly!**
-   - Successfully computes nodal corrections (v, u, f)
-   - Returns expected values
-   - Only shows harmless RuntimeWarnings about NaN casting
-
-**Current Status:**
-- ✅ ttide library works in isolation
-- ✅ Server restarts successfully with local ttide
-- ✅ `/api/v1/mesh` endpoint working - **Zarr loading issue fixed (consolidated=False)**
-
-### Immediate Next Steps
-
-**Phase 3: WebGL Particle System** (HIGH PRIORITY - Current Focus)
-
-**Goal:** Animate particles flowing along tidal currents for visual QC of predictions
-
-**Status:** ✅ Map visualization working, ready for particle animation
-
-**Approach:** Build triangle spatial index → barycentric interpolation → WebGL rendering
-
-**Implementation Steps:**
-
-1. **Update frontend/index.html** (1-2 hours)
-   - Keep existing Mapbox map setup
-   - Update "Load Current Data" button to use real API endpoint
-   - Parse velocity data from API response
-   - Choose visualization method (pick ONE to start):
-     - **Option A (Recommended):** Color nodes by velocity magnitude
-     - **Option B:** Display velocity vectors as arrows (canvas overlay)
-     - **Option C:** Simple heatmap using Mapbox expressions
-
-2. **Test with Woods Hole, MA** (15 mins)
-   ```javascript
-   // Example API call
-   const bbox = {
-     min_lat: 41.5,
-     max_lat: 41.55,
-     min_lon: -70.75,
-     max_lon: -70.7
-   };
-   const time = new Date().toISOString();
-   const url = `/api/v1/mesh?min_lat=${bbox.min_lat}&max_lat=${bbox.max_lat}&min_lon=${bbox.min_lon}&max_lon=${bbox.max_lon}&time=${time}`;
-   ```
-
-3. **Add time controls** (1 hour)
-   - Simple time picker or +/- buttons to change time
-   - Show current selected time
-   - Reload data when time changes
-   - Animate through time (play/pause)
-
-4. **Visual QC Checklist:**
-   - [ ] Can see velocity magnitude varying across map
-   - [ ] Stronger currents in channels/inlets (Woods Hole passage)
-   - [ ] Weaker currents in open water
-   - [ ] Flow direction changes over 6-hour period
-   - [ ] No visual artifacts or missing data
-
-**Recommended Visualization (Option A Details):**
-```javascript
-// Color nodes by velocity magnitude
-const magnitude = Math.sqrt(u*u + v*v);
-const color = velocityToColor(magnitude); // e.g., blue (slow) to red (fast)
-
-// Add as Mapbox circle layer with data-driven styling
-map.addLayer({
-  id: 'current-nodes',
-  type: 'circle',
-  source: 'currents',
-  paint: {
-    'circle-radius': 3,
-    'circle-color': [
-      'interpolate',
-      ['linear'],
-      ['get', 'magnitude'],
-      0, '#0000ff',      // Blue for calm
-      0.5, '#00ff00',    // Green for moderate
-      1.0, '#ff0000'     // Red for strong
-    ],
-    'circle-opacity': 0.7
-  }
-});
-```
-
-**After Basic Visualization Works:**
-- Add legend showing velocity color scale
-- Display velocity magnitude/direction on hover
-- Save selected time/location in URL params
-- Then move to particle animation (Phase 3)
-
-### Known Issues & Warnings
+## 15. KNOWN ISSUES & WARNINGS
 
 1. **ttide library warnings during import:**
    ```
    RuntimeWarning: invalid value encountered in cast
    shallow_m1 = const['ishallow'].astype(int) -1
    ```
-   - These are internal ttide warnings, safe to ignore
-   - Do not affect prediction accuracy
+   - Internal ttide warnings, safe to ignore, do not affect prediction accuracy
 
-2. **Constituent index mapping:**
-   - Currently hardcoded for 8 standard ADCIRC constituents
-   - If dataset has different constituents, mapping will need update
-   - Could extract constituent names from Zarr at runtime for robustness
+2. **S3 data source not fully tested** with current MeshData pre-loading approach
+   - LOCAL works perfectly, S3 `/info` endpoint confirmed working
+   - Full mesh query over S3 untested with optimized code
 
-3. **API endpoint not tested end-to-end:**
-   - Integration code is in place
-   - Algorithm works in isolation
-   - **MUST verify with real S3 Zarr data before considering complete**
+3. **Large bounding boxes** may return too many nodes (>500k limit)
+   - Zoom 8+ threshold mitigates this in practice
 
-4. **Potential performance issue:**
-   - Element filtering loop (lines 76-79 in currents.py) still in Python
-   - For large bounding boxes (>100k elements), this could be slow
-   - Consider pre-computing spatial index in future optimization
+4. **Console logging in particles.js** is verbose (debug logs every frame)
+   - Should be cleaned up before production
 
-### Files Changed Summary (2026-02-05 Session)
+## 16. HOW TO RESUME DEVELOPMENT
 
-```
-backend/app/core/tidal_calc.py          NEW (136 lines) - tidal prediction algorithm ✅
-backend/app/api/currents.py             MODIFIED - tidal predictions + element filtering + Zarr fix ✅
-                                        - Line 29 & 36: consolidated=False (critical bug fix)
-backend/app/core/config.py              MODIFIED - added LOCAL_ZARR_PATH setting ✅
-backend/.env                             NEW - DATA_SOURCE=LOCAL configuration ✅
-backend/requirements.txt                 MODIFIED - ttide local version
-backend/lib/ttide_py-master/             NEW DIRECTORY - local ttide library source
-frontend/index.html                      MODIFIED - velocity visualization + time controls ✅
-                                        - Added velocity magnitude coloring
-                                        - Added time controls (+1h/-1h, picker)
-                                        - Added interactive popups
-                                        - Added velocity legend
-TECHNICAL_REFERENCE.md                   UPDATED (this file) ✅
-```
-
-**Git Status:**
-- ✅ Phase 1 complete - ready to commit changes
-- Consider adding `backend/lib/` to .gitignore (3rd party library)
-- Consider adding `backend/.env` to .gitignore (contains paths/config)
-
-**Key Optimizations Made:**
-1. **Vectorized element filtering** - 3000x faster (0.02s vs 60+s)
-2. **LOCAL data source** - faster iteration during development
-3. **Debug logging** - comprehensive timing for performance monitoring
-
-### How to Resume Work in Next Session
-
-**CURRENT STATUS:** ✅ Phases 1 & 2 COMPLETE - Full working visualization with real tidal predictions
-
-**COMPLETED THIS SESSION:**
-- Fixed critical Zarr loading bug (`consolidated=False` fix)
-- Confirmed visualization working with user testing
-- Time controls functional
-- Interactive features working (popups, statistics)
-
-**NEXT TASK:** Phase 3 - Build WebGL Particle Animation System
-
-**To Resume:**
-
-1. **Start the dev server:**
-   ```bash
-   cd /Users/lukacatipovic/actual-currents
-   ./run_dev.sh
-   # Or manually:
-   # cd backend && source tides/bin/activate && uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-   ```
-
-2. **Verify everything is working:**
-   ```bash
-   # Test API endpoint
-   curl "http://localhost:8000/api/v1/mesh?min_lat=41.5&max_lat=41.55&min_lon=-70.75&max_lon=-70.7&time=2026-02-05T12:00:00Z" | python3 -m json.tool | head -50
-
-   # Open browser
-   open http://localhost:8000
-
-   # Should see:
-   # - Dark map with controls (top right) and legend (bottom left)
-   # - Click "Load Current Data" to see colored dots
-   # - Use +1h/-1h to step through time
-   # - Click dots to see velocity details
-   ```
-
-3. **Begin Phase 3 - Particle Animation:**
-   - Goal: Animate particles flowing with tidal currents
-   - Approach: Triangle spatial index → barycentric interpolation → WebGL rendering
-
-   **Implementation Steps:**
-
-   a. **Build Triangle Spatial Index** (~1 hour)
-      - Create grid overlay (e.g., 100x100 cells) for viewport
-      - Map each triangle to grid cells it intersects
-      - Enable fast "which triangle contains point (x,y)?" lookup
-
-   b. **Implement Barycentric Interpolation** (~1 hour)
-      - Point-in-triangle test (cross product method)
-      - Calculate barycentric weights (w0, w1, w2)
-      - Interpolate velocity: `u = w0*u0 + w1*u1 + w2*u2`
-
-   c. **WebGL Particle Renderer** (~2-3 hours)
-      - Initialize 5,000-10,000 particles in viewport
-      - Render loop (60 FPS):
-        - Find containing triangle (use spatial index)
-        - Interpolate U/V velocity at particle position
-        - Update position: `pos += velocity * dt`
-        - Fade/respawn particles at boundaries
-      - Use `regl` library for cleaner WebGL code (or raw WebGL/Canvas2D for MVP)
-
-   d. **Visual QC Verification**
-      - [ ] Particles flow smoothly (no jumps or artifacts)
-      - [ ] Strong currents in channels, inlets, straits
-      - [ ] Weaker currents in open ocean
-      - [ ] Flow reverses with tidal cycle (~6-12 hours)
-      - [ ] Magnitude visualization matches expected patterns
-
-4. **Testing locations for particle animation:**
-   - **Woods Hole, MA:** `-70.72, 41.52` - Strong tidal passage
-   - **NYC Harbor:** Strong ebb/flood tides
-   - **Gulf of Mexico:** Weaker currents for contrast
-
-5. **Current file structure:**
-   ```
-   frontend/index.html         - Working visualization (Phase 2 complete)
-   backend/app/api/currents.py - API endpoint (Zarr fix applied)
-   backend/app/core/tidal_calc.py - Tidal predictions (working)
-   data/adcirc54.zarr/         - Local Zarr data
-   ```
-
-**Current Configuration:**
-- Data source: LOCAL (`/Users/lukacatipovic/actual-currents/data/adcirc54.zarr`)
-- Server: http://localhost:8000
-- API endpoint: `/api/v1/mesh`
-- Frontend: Served from `frontend/` directory
-
-**Known Limitations:**
-- Large bounding boxes (>0.5° x 0.5°) may take 10+ seconds to load
-- Recommend testing with small regions first (0.05° x 0.05° for Woods Hole)
-- S3 data source not tested yet (using LOCAL for development)
-- No particle animation yet - only static node visualization
-- No mesh simplification/LOD - returns all nodes in bbox
-
-**Performance Notes:**
-- Woods Hole area (0.05° x 0.05°): ~299 nodes, ~4 seconds
-- Larger areas scale linearly with node count
-- Element filtering is optimized (vectorized numpy)
-- Zarr chunking provides good spatial locality
-
----
-
-## 16. SESSION SUMMARIES
-
-### Session 2026-02-06: Performance Optimization & Hilbert Curves 🚀
-
-**Major Upgrades:**
-1. Implemented Hilbert space-filling curve ordering
-2. Fixed critical xarray performance bottleneck
-3. Optimized chunk sizes for faster loading
-
-#### Part 1: Hilbert Curve Spatial Ordering
-
-**Space-Filling Curve Implementation:**
-- Added Hilbert curve encoding (order-16: 65,536 × 65,536 grid)
-- Added Morton Z-order curve as alternative
-- Replaced simple grid-based ordering with intelligent spatial indexing
-- **Benefits:** 80%+ chunk utilization, sequential S3 reads, lower costs
-
-**Files Created:**
-- ✅ `backend/scripts/convert_to_zarr.py` - Added Hilbert/Morton encoding
-- ✅ `backend/scripts/benchmark_spatial_ordering.py` - NEW benchmark script
-- ✅ `backend/scripts/SPATIAL_ORDERING.md` - NEW comprehensive documentation
-
-#### Part 2: Critical Performance Bottleneck Fix
-
-**Problem Identified:**
-- Node queries taking 6.62s out of 6.66s total request time
-- xarray's `.where(bbox_mask, drop=True)` was scanning entire dataset
-- Cloud-optimized Zarr was slower than old netCDF implementation
-
-**Root Cause:**
-```python
-# SLOW (6.62s) - xarray overhead
-nodes_ds = ds.where(bbox_mask, drop=True)
-lats = nodes_ds['lat'].values.tolist()
-```
-
-**Solution - Direct Numpy Indexing:**
-```python
-# FAST (0.001s) - direct array slicing
-lat_array = ds['lat'].values
-bbox_mask = (lat_array >= min_lat) & (lat_array <= max_lat) & ...
-node_indices = np.where(bbox_mask)[0]
-lats = lat_array[node_indices].tolist()
-```
-
-**Performance Impact:**
-- Node query: **6.62s → 0.001s** (6600x faster!)
-- Total request: **6.66s → 0.32s** (20x faster!)
-- Matches old backend performance using direct numpy operations
-
-**File Modified:**
-- ✅ `backend/app/api/currents.py` - Replaced xarray .where() with numpy indexing
-
-#### Part 3: Chunk Size Optimization
-
-**Change:** Reduced chunk size from 50,000 to 10,000 nodes
-- More granular loading for small viewports
-- ~207 chunks instead of ~42
-- Only loads minimal data needed for visible area
-- Better for typical map viewport queries
-
-**Files Updated:**
-- ✅ Zarr data re-converted with 10k chunks
-- ✅ S3 bucket updated (266 MB uploaded)
-
-#### Technical Summary
-
-**Conversion Stats:**
-- Hilbert encoding: 5.15s for 2,066,216 nodes
-- Total conversion: 6.9s
-- Zarr size: 266 MB (85% compression from 1.8 GB netCDF)
-- Chunk configuration: 10k nodes, 50k elements
-- Configurable via `SPATIAL_ORDER_METHOD` in convert script
-
-#### Performance Comparison
-
-**Initial State (Simple Grid + xarray .where()):**
-```
-Woods Hole query (637 nodes):
-- Node query: 6.62s (SLOW - xarray overhead)
-- Element filtering: 0.02s
-- Tidal prediction: 0.00s
-- Total: 6.66s
-- User experience: Unacceptably slow
-```
-
-**After Hilbert Curves (Still slow - bottleneck remained):**
-```
-Same query:
-- Better chunk utilization: 87% vs 42%
-- Sequential chunk reads
-- But still 6.6s due to xarray .where()
-```
-
-**Final State (Hilbert + Direct Numpy Indexing):**
-```
-Woods Hole query (2217 nodes):
-- Node query: 0.001s (FAST - direct numpy!)
-- Node extraction: 0.006s
-- Element filtering: 0.02s
-- Constituent extraction: 0.114s
-- Tidal prediction: 0.00s
-- Total: 0.32s
-- User experience: ⚡ Lightning fast!
-```
-
-**Key Insights:**
-1. **Spatial ordering helps** - Hilbert curves provide better chunk utilization
-2. **But API efficiency matters more** - Direct numpy indexing was the real bottleneck fix
-3. **Combined effect:** 20x faster queries, matches old backend performance
-4. **Smaller chunks help** - 10k chunks load faster for typical viewport sizes
-
-#### Verification
-- ✅ S3 bucket updated with optimized Zarr (402 files, 266 MB)
-- ✅ Metadata confirms: "Hilbert space-filling curve (order-16)"
-- ✅ Query performance: 0.32s for Woods Hole (was 6.66s)
-- ✅ User-tested and confirmed fast
-- ✅ API compatible with new format
-
----
-
-### Session 2026-02-05: Tidal Prediction & Visualization
-
-### 🎉 Major Accomplishments
-
-**Phase 2 Visualization - COMPLETED & TESTED**
-
-1. **Critical Bug Fix - Zarr Loading**
-   - Problem: API hanging on all requests (10+ second timeouts)
-   - Root cause: `xr.open_zarr(consolidated=True)` waiting for non-existent `.zmetadata`
-   - Solution: Changed to `consolidated=False` in `currents.py` lines 29 & 36
-   - Result: API now responds in ~4 seconds ✅
-
-2. **Visualization Features Implemented**
-   - Velocity magnitude coloring (blue→green→yellow→red scale)
-   - Time controls (+1h/-1h buttons, datetime picker, "Jump to Now")
-   - Interactive node popups (speed, direction, U/V components, depth)
-   - Velocity legend and statistics (avg/max velocity display)
-   - All features user-tested and confirmed working ✅
-
-3. **User Testing**
-   - Tested with Woods Hole, MA area (known for strong tidal currents)
-   - Confirmed dots appear on map colored by velocity magnitude
-   - Verified time controls work (can step through tidal cycle)
-   - Confirmed interactive features (popups, statistics) functional
-
-### 📊 Current System Status
-
-**What's Working:**
-- ✅ Backend API serving real tidal predictions
-- ✅ Frontend visualization displaying colored velocity nodes
-- ✅ Time controls for exploring tidal cycles
-- ✅ Interactive features (popups, statistics, legend)
-- ✅ Local Zarr data loading reliably
-- ✅ Response times acceptable (~4s for 299 nodes)
-
-**What's Next:**
-- ⏳ Phase 3: WebGL particle animation system
-- ⏳ Triangle spatial indexing for velocity interpolation
-- ⏳ Barycentric interpolation within mesh triangles
-- ⏳ Real-time particle rendering at 60 FPS
-
-### 🚀 Next Session Goals
-
-**Priority: Phase 3 - Particle Animation**
-
-1. Build triangle spatial index for fast point-in-triangle queries
-2. Implement barycentric interpolation for velocity at arbitrary points
-3. Create WebGL particle system (5,000-10,000 particles)
-4. Render particles flowing with tidal currents at 60 FPS
-5. Visual QC: Verify flow patterns match expectations
-
-**Why Particle Animation:**
-- More intuitive than static colored dots
-- Clearly shows flow direction and intensity
-- Essential for visual QC of tidal predictions
-- Engaging user experience
-- Industry standard for oceanographic visualization
-
-**Estimated Time:** 4-6 hours of development + testing
-
----
-
----
-
-## 17. CURRENT STATUS & NEXT STEPS
-
-### ✅ What's Complete (as of 2026-02-06)
-
-**Phase 1: Tidal Prediction API** - ✅ COMPLETE
-- Harmonic synthesis with ttide nodal corrections (`backend/app/core/tidal_calc.py`)
-- Vectorized element filtering (3000x speedup)
-- API returns accurate tidal currents in <0.02s (after first request)
-
-**Phase 2: Map Visualization** - ✅ COMPLETE
-- Velocity-colored nodes (blue→green→yellow→red)
-- Time controls (+1h/-1h, datetime picker, "Jump to Now")
-- Interactive popups (speed, direction, depth on click)
-- Statistics display, velocity legend
-
-**Data Optimization** - ✅ COMPLETE
-- Hilbert curve ordering, 10k-node chunks, direct numpy indexing
-- Query time: 0.32s on first request (was 6.66s)
-
-**Auto-Load on Pan/Zoom** - ✅ COMPLETE
-- Nodes load automatically as user pans/zooms (no button click needed)
-- Debounced 100ms, AbortController cancels stale requests
-- Minimum zoom 8 threshold, graceful error handling
-- `source.setData()` pattern prevents event handler stacking
-
-**API Performance Optimization** - ✅ COMPLETE (2026-02-06 Session 4)
-- GZip compression middleware (87% smaller responses)
-- Pre-load ALL static arrays into RAM at startup (eliminates per-request Zarr I/O)
-- Optional `include_elements` and `include_depth` query params to skip unneeded data
-- Faster element index remapping (array lookup instead of `np.vectorize(dict.get)`)
-- Optimized frontend GeoJSON loop (pre-destructured arrays, direction computed on-demand)
-- Debounce reduced from 300ms to 100ms
-
-**Performance After Optimization:**
-
-| Metric | Before (Session 3) | After (Session 4) |
-|---|---|---|
-| First request (cold) | 0.32s | 0.34s (one-time RAM load) |
-| Subsequent requests | 0.32s | **0.017s** (19x faster) |
-| Response size (raw) | ~112 KB | ~36 KB |
-| Response size (gzip) | N/A | **14 KB** (87% reduction) |
-| Without elements/depth (gzip) | N/A | **10 KB** |
-| Debounce delay | 300ms | 100ms |
-
-**Key architectural change:** `MeshData` class in `currents.py` pre-loads all numpy arrays
-(lat, lon, depth, elements, u_amp, v_amp, u_phase, v_phase, tidefreqs) into RAM on first
-request. Subsequent requests do pure numpy slicing with zero Zarr I/O.
-
----
-
-### 🎯 IMMEDIATE NEXT: Particle Flow Animation
-
-**Status:** Plan approved, `frontend/js/` directory created, implementation NOT started yet.
-
-**Goal:** Create `frontend/js/particles.js` with two classes, wire into `frontend/index.html`.
-
----
-
-### 📋 EXACT IMPLEMENTATION PLAN (Ready to Execute)
-
-#### File 1: `frontend/js/particles.js` (NEW - create this file)
-
-**Class 1: `TriangleSpatialIndex`**
-Grid-based spatial index for fast "which triangle contains point?" lookup.
-
-```javascript
-class TriangleSpatialIndex {
-    // Constructor: takes lats[], lons[], triangles[][], gridSize (default 50)
-    // Computes bounding box, builds 50x50 grid
-    // Each grid cell stores array of triangle indices that overlap it
-
-    _buildIndex()     // For each triangle: compute bbox, find overlapping grid cells, store
-    findTriangle(lat, lon)  // Grid lookup → candidate triangles → point-in-triangle test → return index or -1
-    getBarycentricCoords(lat, lon, triIdx)  // Returns [w0, w1, w2] weights for the 3 vertices
-
-    // Point-in-triangle uses barycentric/cross-product method:
-    // v0 = C-A, v1 = B-A, v2 = P-A
-    // dot products → u, v → point inside if u>=0, v>=0, u+v<=1
-}
-```
-
-**Class 2: `ParticleSystem`**
-Canvas2D overlay with trail-effect rendering.
-
-```javascript
-class ParticleSystem {
-    // Constructor: takes map, meshData, options={numParticles:5000, speedScale:3000, maxAge:100, trailFade:0.96, lineWidth:1.2}
-    // Builds TriangleSpatialIndex from meshData
-    // Creates canvas overlay via map.getCanvasContainer()
-    // Spawns particles randomly in viewport
-    // Tracks map movement state (_isMoving flag)
-
-    // Public API:
-    start()    // Begin animation loop
-    stop()     // Stop animation, clear canvas
-    toggle()   // Toggle on/off, returns boolean
-    destroy()  // Remove canvas, clean up event listeners
-    updateMeshData(meshData)  // Rebuild spatial index (called when user pans to new area)
-
-    // Animation loop (_animate → _update → _render → requestAnimationFrame):
-
-    _update() {
-        // For each particle:
-        //   1. Age++, respawn if too old (maxAge frames)
-        //   2. spatialIndex.findTriangle(lat, lon) → triIdx
-        //   3. If triIdx < 0: respawn (outside mesh)
-        //   4. getBarycentricCoords → [w0, w1, w2]
-        //   5. Interpolate: u = w0*u[v0] + w1*u[v1] + w2*u[v2] (same for v)
-        //   6. Save prevLat/prevLon
-        //   7. Update: lat += v * dt * speedScale / 111000
-        //             lon += u * dt * speedScale / (111000 * cos(lat))
-    }
-
-    _render() {
-        // If map is moving: ctx.clearRect (no trails during pan)
-        // If stationary: fade via globalCompositeOperation='destination-in' + semi-transparent fill
-        //   This creates trail effect where old particle positions gradually fade
-        // Batch all line segments into single ctx.beginPath()/stroke() call:
-        //   For each particle with valid prevLat:
-        //     prev = map.project([prevLon, prevLat])
-        //     curr = map.project([lon, lat])
-        //     ctx.moveTo(prev.x, prev.y) → ctx.lineTo(curr.x, curr.y)
-        //   Single ctx.stroke() — performant for 5000 particles
-    }
-
-    // Canvas setup:
-    //   position: absolute, top:0, left:0, pointer-events:none
-    //   HiDPI: canvas.width = clientWidth * devicePixelRatio, ctx.setTransform(dpr,0,0,dpr,0,0)
-    //   Resize handler syncs canvas size
-
-    // Event listeners:
-    //   window 'resize' + map 'resize' → _syncCanvasSize
-    //   map 'move' → _isMoving = true
-    //   map 'moveend' → _isMoving = false
-}
-```
-
-**Performance budget (estimated):**
-- `_update`: ~0.6ms (5000 spatial index lookups + interpolation)
-- `_render` projection: ~0.1ms (10,000 map.project() calls)
-- `_render` drawing: ~0.5ms (single batched stroke)
-- Total: ~1.3ms/frame (well within 16ms for 60fps)
-
-#### File 2: `frontend/index.html` (MODIFY)
-
-**Changes needed:**
-
-1. Add script tag before main `<script>`:
-```html
-<script src="js/particles.js"></script>
-```
-
-2. Update `startAnimation()` function (currently a placeholder at ~line 387):
-```javascript
-function startAnimation() {
-    if (!meshData) return;
-
-    if (!particleSystem) {
-        particleSystem = new ParticleSystem(map, meshData, {
-            numParticles: 5000,
-            speedScale: 3000,
-            maxAge: 100,
-            trailFade: 0.96,
-            lineWidth: 1.2
-        });
-        particleSystem.start();
-        document.getElementById('animateBtn').textContent = 'Stop Animation';
-    } else {
-        const running = particleSystem.toggle();
-        document.getElementById('animateBtn').textContent = running ? 'Stop Animation' : 'Start Animation';
-    }
-}
-```
-
-3. In `visualizeMesh()` (after statistics update, ~line 383), add:
-```javascript
-if (particleSystem) {
-    particleSystem.updateMeshData(meshData);
-}
-```
-
-4. In `clearMesh()`, add particle system cleanup:
-```javascript
-if (particleSystem) {
-    particleSystem.stop();
-}
-```
-
----
-
-### 🚀 HOW TO RESUME IN NEXT SESSION
-
-**Step 1: Verify current state**
+**Step 1: Start the dev server**
 ```bash
-cd /Users/lukacatipovic/actual-currents
-cd backend && source tides/bin/activate && uvicorn app.main:app --reload --port 8000
-# In browser: open http://localhost:8000
-# Zoom to Woods Hole area (zoom 9+) - nodes should auto-load
-# Verify colored dots appear and time controls work
+cd /Users/lukacatipovic/actual-currents/backend
+source tides/bin/activate
+uvicorn app.main:app --reload --port 8000
 ```
 
-**Step 2: Create `frontend/js/particles.js`**
-- Implement `TriangleSpatialIndex` and `ParticleSystem` classes per plan above
-- The `frontend/js/` directory already exists (empty)
-
-**Step 3: Wire into `frontend/index.html`**
-- Add `<script src="js/particles.js"></script>` tag
-- Update `startAnimation()`, `visualizeMesh()`, `clearMesh()` per plan above
-
-**Step 4: Test**
-- Zoom to Woods Hole, MA (lat: 41.52, lon: -70.72)
-- Wait for nodes to auto-load, click "Start Animation"
-- Verify particles flow with tidal currents
-- Test panning (particles should reset), time changes (flow should reverse)
-
-**Key tuning parameters if particles look wrong:**
-- `speedScale`: increase if particles barely move, decrease if they fly off screen
-- `numParticles`: 5000 default, try 2000 for low-end or 10000 for dense
-- `maxAge`: 100 frames (~1.7s), increase for longer trails
-- `trailFade`: 0.96 (trails persist ~25 frames), lower = shorter trails
-
-### Current File Structure
+**Step 2: Test in browser**
 ```
-frontend/
-  index.html              - 436 lines, auto-load + velocity visualization ✅
-  js/                     - Directory created, empty ⏳
-    particles.js          - TO CREATE: spatial index + particle system
-
-backend/
-  app/main.py             - FastAPI entry point, GZip middleware ✅
-  app/api/currents.py     - API endpoint, MeshData pre-loading, optional fields ✅
-  app/core/tidal_calc.py  - Tidal prediction algorithm ✅
-  app/core/config.py      - Settings (LOCAL/S3 data source) ✅
+http://localhost:8000
 ```
+- Zoom to Woods Hole, MA (lat: 41.52, lon: -70.72, zoom 9+)
+- Nodes auto-load + particle animation auto-starts
+- Use +1h/-1h buttons to step through tidal cycle
 
-### Key Architecture Notes for Next Session
-- **`currents.py` now uses `MeshData` class** - all arrays pre-loaded into RAM on first request
-- **No more xarray Dataset caching** - replaced with direct numpy arrays
-- **API response no longer includes `bbox`** - was redundant (client already knows it)
-- **`include_elements=true` and `include_depth=true`** are query param defaults; set to `false` to skip
-- **Element remapping uses array lookup** (`idx_map[valid_elements]`) instead of `np.vectorize(dict.get)`
-- **Frontend computes `direction` on-demand** in click handler only (not stored per feature)
-- **Frontend destructures `meshData.nodes`** before loop for faster access
-
-### Testing Locations
+**Testing Locations:**
 - **Woods Hole, MA** (41.52, -70.72) - Strong tidal passage, best for testing
 - **NYC Harbor** (40.7, -74.0) - Complex flow patterns
 - **Miami/Florida Keys** (25.2, -80.5) - Coastal currents
 
-### Visual QC Checklist (for particle animation)
-- [ ] Particles flow smoothly (no jumps or artifacts)
-- [ ] Strong currents in channels/inlets (Woods Hole passage)
-- [ ] Weaker currents in open water
-- [ ] Flow direction changes over 6-hour tidal cycle (+1h button)
-- [ ] 60 FPS performance maintained
-- [ ] Panning works (trails reset, particles respawn)
-- [ ] Time controls update particle flow direction
+**Current Configuration:**
+- Data source: LOCAL (`data/adcirc54.zarr`)
+- Server: http://localhost:8000
+- Particle params in `frontend/index.html` ~line 398: `numParticles=2500, speedScale=2, maxAge=80`
 
 ---
 
-### Session 2026-02-06 (Session 4): API Performance Optimization
+## 17. SESSION LOG (CONDENSED)
 
-**Changes Made:**
+### 2026-02-05: Tidal Prediction API + Map Visualization
+- Implemented `tidal_calc.py` harmonic synthesis with ttide
+- Fixed Zarr loading bug (`consolidated=False`)
+- Added velocity-colored nodes, time controls, interactive popups
+- Vectorized element filtering (3000x speedup)
 
-1. **`backend/app/main.py`** - Added `GZipMiddleware` from starlette (87% smaller responses)
+### 2026-02-06: Performance Optimization + Hilbert Curves
+- Hilbert curve spatial ordering for optimal chunk utilization
+- Direct numpy indexing replacing xarray `.where()` (6600x faster)
+- MeshData RAM pre-loading (eliminates per-request Zarr I/O)
+- GZip compression middleware (87% smaller responses)
+- Reduced chunk size to 10k nodes, debounce to 100ms
+- Query time: 6.66s → 0.017s
 
-2. **`backend/app/api/currents.py`** - Major refactor:
-   - Replaced `_ds_cache` (xarray Dataset) with `MeshData` class holding pre-loaded numpy arrays
-   - All static data (lat, lon, depth, elements, u_amp, v_amp, u_phase, v_phase, tidefreqs, constituent_names) loaded into RAM on first request
-   - Eliminated per-request Zarr I/O (was 0.114s for constituent extraction)
-   - Added `include_elements` and `include_depth` optional query params
-   - Replaced `np.vectorize(dict.get)` element remapping with direct array lookup
-   - Removed redundant `bbox` from response
-   - Removed verbose DEBUG print statements (replaced with single summary line)
-
-3. **`frontend/index.html`** - Frontend optimizations:
-   - Destructured `meshData.nodes` before feature loop
-   - Pre-allocated features array with `new Array(n)`
-   - Removed `direction` from per-feature properties (computed on-demand in click handler)
-   - Handles optional `depth` field gracefully
-   - Reduced debounce from 300ms to 100ms
+### 2026-02-07: Particle Animation System
+- Created `frontend/js/particles.js` (622 lines)
+- TriangleSpatialIndex (50x50 grid) + ParticleSystem (Canvas2D overlay)
+- Barycentric interpolation, speed-based coloring (12-stop gradient)
+- Pixel-space movement for zoom-independent speed
+- Trail fade via `destination-in` composite
+- Auto-start on data load, toggle button, pan/zoom handling
 
 ---
 
